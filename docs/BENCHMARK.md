@@ -44,7 +44,7 @@ it — the budget is not 4 GB.
 The failure mode here is abrupt: not "gradually falls behind" but **CUDA OOM**,
 possibly not until a long utterance produces an unusually large activation.
 
-**3. p95 word age < 7 s**, measured end to end at `max_utterance_ms = 4000`.
+**3. p95 word age < 7 s**, at `max_utterance_ms = 4000`.
 
 Added in D25/D26, because gates 1 and 2 together were passable by a
 configuration that is unusable. Word age is how stale the *first word* of a
@@ -58,8 +58,25 @@ At the old defaults (`D` = 8 s, silence 700 ms, RTF 0.4, MT 300 ms) that is
 **12.2 seconds** — and it passes gates 1 and 2 comfortably. Twelve seconds
 behind is a subtitled recording, not a meeting anyone can take part in.
 
-Measure it **end to end**, not by plugging RTF into the formula: MT round trip
-and queue wait are real and neither appears in RTF.
+**This gate is evaluated twice, and the two are different claims (D51).**
+
+| | Level 3 — *predicted* | Level 7 — *measured* |
+|---|---|---|
+| Where the numbers come from | measured RTF from this benchmark, plus a **measured** MT round trip (time the real API call — `doctor` already makes one), plus the config's `silence_threshold_ms` and `max_utterance_ms` | a live 10-minute session, timestamped end to end through the JSONL log (D34) |
+| What it can see | the dominant terms | queue wait, scheduling, the browser competing for the GPU |
+| What it is for | **choosing the model** — this is the column you select on | **evidencing the DoD** |
+
+Level 3 cannot measure this end to end, because at Level 3 there is no end: the
+Transcriber is not wired, the Translator does not exist, and there is no UI.
+Predicting it here is not a shortcut, it is the only thing available — and it is
+sufficient for its actual job, which is ranking seven configurations against each
+other. What it must **not** be is quietly reported as a measurement. Label the
+column *predicted* in the results table.
+
+The one term you can and should measure rather than assume at Level 3 is
+`MT_roundtrip`: it is a network call to a live API, its latency is real, and
+plugging in a guessed 300 ms is exactly the kind of substitution D25 exists to
+prevent. Time ten of them and take the p95.
 
 ### Why this changes which model wins
 
@@ -133,6 +150,14 @@ calculated.
    superseded). Record per-chunk processing time. Shorter chunks change the
    picture: per-call overhead is amortised over less audio, so RTF at 4 s can be
    meaningfully worse than at 8 s. Measure at the length the app will use.
+
+   **If Level 2 is not built yet**, fixed 4 s chunks are the substitute, and they
+   are optimistic: real utterances close on *silence* far more often than on
+   max-length, so the true distribution is skewed shorter than 4 s and therefore
+   worse in RTF. Bracket it instead of assuming — run the selected configuration
+   at **1.5 s as well as 4 s** and report both. If the short bracket fails a gate
+   the 4 s number passes, that is the finding, and it is one the headline table
+   would have hidden.
 4. Benchmark **the configuration the app will actually use**, or the number is
    fiction:
    - `beam_size=1` — greedy, as the real-time path will be
@@ -169,7 +194,7 @@ which is the worst possible time to discover it.
 
 Write results into this file and update `STATE.md`.
 
-| Model | compute_type | RTF (first min) | RTF (last min) | Peak VRAM | p95 word age | Under 0.5 sustained? | Word age < 7 s? | Fits alongside browser? | Notes |
+| Model | compute_type | RTF (first min) | RTF (last min) | Peak VRAM | p95 word age *(predicted)* | Under 0.5 sustained? | Word age < 7 s? | Fits alongside browser? | Notes |
 |---|---|---|---|---|---|---|---|---|---|
 | small | float16 | | | | | | | | |
 | small | int8_float16 | | | | | | | | |

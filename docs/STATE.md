@@ -164,6 +164,10 @@ away from being done in one sitting.
   the core pipeline works.
 - Whether `int8_float16` beats `float16` on a GPU with no tensor cores. The
   benchmark will say; do not assume the RTX answer transfers (D18).
+- Whether Level 3 runs before Level 2. It may (D52) — the benchmark chunks at a
+  fixed 4 s and needs no Segmenter — at the cost of an optimistic RTF, mitigated
+  by bracketing at 1.5 s. Not yet chosen; the deciding factor is how scarce
+  Windows access is.
 - Whether the demo machine's loopback endpoint negotiates `paInt16` or falls
   back to `paFloat32`, and what `defaultSampleRate` it reports. Both paths are
   built and both feed the same formatter (D49), so this is a fact to record on

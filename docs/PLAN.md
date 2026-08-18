@@ -146,18 +146,30 @@ Not code. A measurement, run per `BENCHMARK.md` on the Windows machine, with a
 browser open (D18).
 
 **Deliverables**
+- **`tools/benchmark.py`** — the harness. 7 configurations × 10 minutes is ~70
+  minutes of runs with per-chunk timing, VRAM polling and first/last-minute RTF
+  split; that is not a job for a REPL. **Written and dry-run on Linux against
+  `WavFileSource`, executed on Windows** (D51) — the only Windows-specific thing
+  in it is that a GPU answers. Emits the results row as JSON so the table is
+  transcribed, not retyped.
 - Hardware survey table filled in (driver, CUDA, VRAM at idle, CPU/RAM).
 - 7 configurations × 10 minutes sustained, first-minute vs last-minute RTF.
-- Filled results table including the **p95 word age** column.
+- Filled results table including the **p95 word age (predicted)** column, and a
+  **measured** MT round trip feeding it rather than a guessed 300 ms.
 - Selected `model_size` + `compute_type` written into config.
 
 **Acceptance**
 - [ ] `ctranslate2.get_cuda_device_count()` returns `1` before any timing is trusted.
 - [ ] At least one configuration passes **all three** gates: sustained RTF < 0.5,
-      VRAM leaves room for desktop + browser, **p95 word age < 7 s**.
+      VRAM leaves room for desktop + browser, **p95 word age < 7 s** (predicted
+      here from measured RTF and a measured MT round trip; Level 7 measures it
+      end to end — see `BENCHMARK.md` gate 3 and D51).
 - [ ] The chosen config is the *fastest that is accurate enough*, not the largest
       that fits (D26).
 - [ ] Throttling penalty (first vs last minute) recorded.
+- [ ] The harness runs on Linux against a WAV before it is trusted on Windows —
+      a benchmark whose first execution is on the machine that matters is a
+      benchmark you are debugging instead of running.
 
 **Unblocks** Level 4. **Nothing after this level can start without it.**
 

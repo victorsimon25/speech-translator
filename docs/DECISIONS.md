@@ -812,3 +812,67 @@ that can drop audio for unrelated reasons.
 shows overruns or gaps, swap in a callback plus a bounded queue. The change is
 local to `wasapi.py` because the formatter and the `AudioSource` contract do not
 move.
+
+---
+
+## 2026-08-18 — Session 6 (Level 3 preparation)
+
+### D51. The benchmark gets a harness, and gate 3 is predicted at 3, measured at 7
+Two inconsistencies in `BENCHMARK.md`, both found by asking what Level 3 would
+actually *do* on the day rather than what it says.
+
+**The harness.** `BENCHMARK.md` describes a method — 7 configurations, 10
+sustained minutes each, per-chunk timing, first-minute vs last-minute RTF, VRAM
+polled across the run — and `PLAN.md` said "not code, a measurement". Both are
+true of the *deliverable* and neither is true of the doing: 70 minutes of runs
+with that much bookkeeping is not something anyone drives from a REPL, and a
+mis-typed loop discovered at minute 55 costs the whole session.
+
+`tools/benchmark.py` is therefore a Level 3 deliverable. It is **written and
+dry-run on Linux** against `WavFileSource` with a tiny model on CPU, and
+**executed on Windows**. The only Windows-specific thing about it is that a GPU
+answers; every loop, timer and table row is platform-neutral. This is the same
+split as D48 — shrink "Windows-only" to the part that genuinely is, so the first
+run on the demo machine is a *run* and not a debugging session.
+
+**Gate 3.** `BENCHMARK.md` said "measure p95 word age end to end, not by plugging
+RTF into the formula". At Level 3 there is no end to end — no Transcriber wired,
+no Translator, no UI; those are Levels 4, 5 and 6. The instruction was written
+when the benchmark was step 1 and was not revisited when D20 moved it.
+
+Reconciled rather than deleted, because the underlying point stands:
+
+- **Level 3 predicts it**, from measured RTF plus a **measured** MT round trip —
+  and that second term is the part worth insisting on. It is a live API call with
+  a real latency; substituting a guessed 300 ms into a gate is exactly what D25
+  exists to stop. Time ten calls, take the p95. The prediction's job is to *rank
+  seven configurations*, and it is sufficient for that.
+- **Level 7 measures it**, end to end, off the JSONL log (D34), where queue wait
+  and the browser competing for the GPU are visible.
+
+The results column is labelled *predicted* so the two are never confused. A
+prediction reported as a measurement is the failure mode; a prediction reported
+as a prediction is just the right tool for choosing a model.
+
+### D52. Level 3 may run before Level 2, at a stated cost
+`PLAN.md`'s rule is one level at a time. Level 3 is the exception worth naming,
+because its dependency on Level 2 is weaker than the ladder implies: the
+benchmark chunks audio at a **fixed** 4 s (D25), which needs no Segmenter.
+
+What Level 2 actually contributes is a *realistic chunk-length distribution*.
+Real utterances close on silence far more often than on max-length, so the true
+distribution skews shorter than 4 s — and shorter chunks amortise per-call
+overhead over less audio, which makes RTF **worse**. A fixed-4 s benchmark is
+therefore optimistic, not neutral.
+
+**If Level 3 runs first, the mitigation is to bracket rather than assume:** run
+the selected configuration at 1.5 s as well as 4 s and report both. If the short
+bracket fails a gate the 4 s number passes, that is the finding — and it is one
+the headline table would otherwise have hidden until Level 7.
+
+Recorded because it is a deliberate deviation from a stated project rule. The
+argument for taking it is access: Levels 0 and 1 already owe the Windows machine
+a `uv sync`, a `doctor` run and a 10-minute capture, and the benchmark needs that
+capture as its input, so all four fit in one session on that machine. The
+argument against is that the headline RTF is then approximate until Level 7
+confirms it.
