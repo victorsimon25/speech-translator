@@ -24,13 +24,15 @@ On CUDA it is near-certain that *something* clears the bar, so the benchmark's
 job has shifted from "is this possible" to "how much can we afford, and does it
 fit in memory" (D20).
 
-## Two gates. Both must pass.
+## Three gates. All must pass.
 
 **1. Sustained RTF < 0.5.**
 
 Half, not 1.0, because the remaining budget must cover translation, the UI, the
 browser, the meeting client itself, and thermal throttling. An app that is
 exactly keeping up has no margin for the moment a demo needs it.
+
+**This is a stability gate. It is not a latency gate** — see gate 3.
 
 **2. Peak VRAM leaves room for the desktop and the browser.**
 
@@ -41,6 +43,31 @@ it — the budget is not 4 GB.
 
 The failure mode here is abrupt: not "gradually falls behind" but **CUDA OOM**,
 possibly not until a long utterance produces an unusually large activation.
+
+**3. p95 word age < 7 s**, measured end to end at `max_utterance_ms = 4000`.
+
+Added in D25/D26, because gates 1 and 2 together were passable by a
+configuration that is unusable. Word age is how stale the *first word* of a
+caption is by the time the user reads it:
+
+```
+word_age = silence_threshold + MT_roundtrip + D × (1 + RTF)
+```
+
+At the old defaults (`D` = 8 s, silence 700 ms, RTF 0.4, MT 300 ms) that is
+**12.2 seconds** — and it passes gates 1 and 2 comfortably. Twelve seconds
+behind is a subtitled recording, not a meeting anyone can take part in.
+
+Measure it **end to end**, not by plugging RTF into the formula: MT round trip
+and queue wait are real and neither appears in RTF.
+
+### Why this changes which model wins
+
+RTF pays **twice** — it multiplies `D` in the formula above. So the selection
+rule is **the fastest model that is accurate enough, not the largest that
+fits**. A model that fits in VRAM and clears RTF 0.49 is a worse choice than one
+at RTF 0.25, even though the table's first two columns would call them both a
+pass. Fill in the word-age column and select on it.
 
 ## Hardware under test
 
@@ -98,16 +125,20 @@ calculated.
    Spanish-language interview or podcast — the capture stage produces its own
    benchmark input, and that exercises the real path rather than a curated file.
    Keep the recipe here; keep the audio out of git.
-3. Process the sample in chunks matching the planned utterance length (6–8 s,
-   per D12), recording per-chunk processing time.
+3. Process the sample in chunks matching the planned utterance length —
+   **4 s, per D25** (not the 6–8 s D12 originally suggested; that range is
+   superseded). Record per-chunk processing time. Shorter chunks change the
+   picture: per-call overhead is amortised over less audio, so RTF at 4 s can be
+   meaningfully worse than at 8 s. Measure at the length the app will use.
 4. Benchmark **the configuration the app will actually use**, or the number is
    fiction:
    - `beam_size=1` — greedy, as the real-time path will be
    - `condition_on_previous_text=False` — prevents hallucination loops on
      chunked audio
    - `vad_filter=False` — our Segmenter owns VAD (D23)
-   - `language` pinned — the app locks language after the first utterance, so
-     re-running language identification every chunk would overstate the cost
+   - `language` pinned — the app locks language after a short detection window
+     (D32), so re-running language identification every chunk would overstate
+     the cost
 5. Exclude model load time from RTF; record it separately. Mark the first chunk
    as warm-up and report it separately too.
 6. Record the **whole run**, not a warm-up slice.
@@ -135,20 +166,24 @@ which is the worst possible time to discover it.
 
 Write results into this file and update `STATE.md`.
 
-| Model | compute_type | RTF (first min) | RTF (last min) | Peak VRAM | Under 0.5 sustained? | Fits alongside browser? | Notes |
-|---|---|---|---|---|---|---|---|
-| small | float16 | | | | | | |
-| small | int8_float16 | | | | | | |
-| medium | float16 | | | | | | |
-| medium | int8_float16 | | | | | | |
-| large-v3-turbo | float16 | | | | | | |
-| large-v3-turbo | int8_float16 | | | | | | |
-| large-v3 | int8_float16 | | | | | | |
+| Model | compute_type | RTF (first min) | RTF (last min) | Peak VRAM | p95 word age | Under 0.5 sustained? | Word age < 7 s? | Fits alongside browser? | Notes |
+|---|---|---|---|---|---|---|---|---|---|
+| small | float16 | | | | | | | | |
+| small | int8_float16 | | | | | | | | |
+| medium | float16 | | | | | | | | |
+| medium | int8_float16 | | | | | | | | |
+| large-v3-turbo | float16 | | | | | | | | |
+| large-v3-turbo | int8_float16 | | | | | | | | |
+| large-v3 | int8_float16 | | | | | | | | |
+
+Also record, for the selected configuration, a **subjective accuracy note** in
+the demo's source language. The selection rule is "fastest that is accurate
+enough", and "enough" has to be judged by listening, not by the RTF column.
 
 Then state plainly:
 
-- **Selected model size and `compute_type`**, with the RTF *and* the peak VRAM
-  that justify them.
+- **Selected model size and `compute_type`**, with the RTF, the peak VRAM *and*
+  the p95 word age that justify them.
 - **Throttling penalty** observed between first and last minute.
 - Whether `int8_float16` actually beat `float16` on a part with no tensor cores.
 - Whether any headroom remains for the diarization stretch goal (D9). Expect
@@ -162,7 +197,9 @@ The realistic failure on CUDA is **out of memory**, not slowness. In order:
 1. Drop to `int8_float16` — roughly halves the weight footprint.
 2. Drop a model size.
 3. Reduce `max_utterance_ms` — shorter utterances mean smaller activations, at
-   the cost of more mid-sentence cuts (the D12 tradeoff).
+   the cost of more mid-sentence cuts (the D12 tradeoff, now partly paid down by
+   sentence carry-over, D29). Floor is 2000 ms (D28). Note that this *helps*
+   gate 3 while hurting translation quality.
 
 If instead RTF is the problem even at `small`, that is a surprising result worth
 investigating before working around: check that CUDA is genuinely being used and

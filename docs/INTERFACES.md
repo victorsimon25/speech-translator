@@ -8,14 +8,21 @@ this file is wrong and should be fixed.
 ## Pipeline
 
 ```
-AudioSource → Segmenter → Transcriber → Translator → Publisher → UI
- (WASAPI)      (Silero VAD  (Whisper,     (Google      (WebSocket)  (browser)
-               + max-len)    local CUDA)   Cloud)
-             └──────────┘  └────── separate process (GIL) ──────┘
+AudioSource → Segmenter → Transcriber → SentenceSplitter → Translator → Publisher → UI
+ (WASAPI)      (Silero VAD  (Whisper,      (carry-over       (Google      (WebSocket)  (browser)
+               + max-len)    local CUDA)    fragment)         Cloud)
+                           └── worker process ──┘
 ```
 
 Every arrow is a queue. The `Segmenter → Transcriber` queue crosses a **process**
-boundary (see D15) — the rest may be threads or coroutines.
+boundary (D15); the Transcriber's return path crosses back. Everything except the
+Transcriber lives in the main asyncio process — including translation, which is
+network-bound and would otherwise idle the GPU (D27). The rest may be threads or
+coroutines.
+
+**The `Segmenter → Transcriber` queue is bounded** (`asr_queue_maxsize = 4`) with
+an adaptive-shrink-then-drop-oldest policy. See D28; the depth is published in
+the `health` message.
 
 ---
 
@@ -69,9 +76,18 @@ class Utterance:
 **Closing rule (D12):** close when silence exceeds `silence_threshold_ms`, **or**
 when the buffer reaches `max_utterance_ms` — whichever comes first.
 
-**Tunables** (these are the two numbers you will spend tuning time on):
-- `silence_threshold_ms` — start around 500–800
-- `max_utterance_ms` — start around 6000–8000
+**Tunables — derived, not guessed (D25).** These come out of the latency budget:
+
+| Key | Value | Why |
+|---|---|---|
+| `silence_threshold_ms` | 600 | latency budget |
+| `max_utterance_ms` | 4000 | largest `D` meeting a 7 s word-age target at the RTF gate |
+| `min_utterance_ms` | 300 | below this, discard — VAD blip, not speech (D30) |
+| `max_utterance_floor_ms` | 2000 | floor for adaptive shrink under load (D28) |
+
+`max_utterance_ms` is the **dominant latency knob** — see D25 before changing it.
+The Segmenter must accept a *runtime* override of the effective value, because
+the backpressure controller shrinks it under load (D28).
 
 `preceding_silence_ms` is carried so the silence-visualisation bonus is cheap if
 that turns out to be what the brief means. It costs nothing to populate.
@@ -91,55 +107,122 @@ class Transcript:
     language: str              # ISO 639-1, from Whisper's own LID
     language_confidence: float
     asr_ms: int                # wall-clock; used to compute RTF at runtime
+    no_speech_prob: float      # hallucination guard (D30)
+    avg_logprob: float         # hallucination guard (D30)
 ```
 
 - Model size, `device` and `compute_type` are all decided by `BENCHMARK.md` and
   read from config. Do not hard-code them before that runs (D20).
 - `language` is populated from Whisper's built-in language identification — no
-  separate model. Detected on the first utterance, surfaced to the UI, then
-  **locked** for the session unless the user overrides (see PRD, user inputs).
+  separate model. **Accumulated over the first ~10 s of speech** (not wall clock —
+  silence does not count), confidence-weighted, then **locked** for the session
+  unless the user overrides (D32; see PRD, user inputs). Locking on the first
+  utterance alone is a coin flip when that utterance is "okay, hi".
+- **A transcript is rejected** — never published — when the utterance is shorter
+  than `min_utterance_ms`, `no_speech_prob` is above threshold, or `avg_logprob`
+  is below threshold (D30). A fabricated caption is worse than a missing one:
+  the user has no way to tell it is fabricated.
 - `asr_ms` is not diagnostics-only: `asr_ms / (end_ms - start_ms)` is the live
   real-time factor and it is the honest answer to "is this actually real-time".
 
 ---
 
-## 4. Translator
+## 4. SentenceSplitter
+
+Turns transcripts into **caption-sized units**. The caption unit is the
+**sentence**, not the utterance (D29).
+
+```python
+@dataclass
+class Sentence:
+    id: str                    # sentence-scoped: "u_0042.s1"
+    utterance_id: str
+    text: str
+    language: str
+    preceding_silence_ms: int  # only on the FIRST sentence of an utterance; 0 after
+    closed_by: Literal["silence", "max_length"]   # from the parent Utterance
+    is_flush: bool             # emitted by the flush rule, not by a sentence end
+```
+
+`closed_by` and `preceding_silence_ms` are carried through from `Utterance`
+because the caption message needs them and `Translation` does not carry them —
+see the join note under Publisher.
+
+**Rule:**
+1. Prepend any held fragment from the previous utterance to `Transcript.text`.
+2. Split on sentence boundaries.
+3. Emit every **complete** sentence immediately.
+4. **Hold** the trailing fragment for the next utterance.
+
+Complete sentences are not delayed at all, so this buys translation quality
+without spending any of the latency budget (D25).
+
+**The flush rule is not optional.** A held fragment must be emitted when silence
+exceeds `2 × silence_threshold_ms`, on `stop`, or at session end. Without it the
+last words spoken in a meeting are held forever and never appear.
+
+---
+
+## 5. Translator
 
 ```python
 @dataclass
 class Translation:
-    utterance_id: str
+    sentence_id: str
     source_text: str
-    target_text: str
+    target_text: str | None    # None when translation failed — UI shows source only
     source_lang: str
     target_lang: str
     mt_ms: int
+    mt_error: str | None
 ```
 
 Google Cloud Translation, free tier (D7). Keep this behind an interface — the
 provider is the most likely thing to change, and the free-tier character budget
 is finite.
 
-**Track cumulative characters sent.** The free tier is 500 000/month and does not
-roll over. Burning it in testing before demo day would be an avoidable failure.
+**Consumed by exactly one serialized task (D27).** Transcripts leave the worker
+in FIFO order, but concurrent translations can complete out of order and would
+scramble the caption stream. One task consuming an ordered queue costs no
+measurable latency — utterance rate is far below translation throughput — and
+removes the need for a reorder buffer.
+
+**Required behaviours (D31):**
+- **Persist** cumulative characters to a file keyed by month. 500 000/month, no
+  roll-over. Warn at 80%, hard-stop at a configurable ceiling. An in-memory
+  counter cannot see the realistic failure, which is a testing loop across many
+  process restarts.
+- **LRU cache** on `(source_lang, target_lang, text)`. Meeting speech repeats
+  ("okay", "yes", "can you hear me") — free characters and free latency.
+- **Skip entirely when `source_lang == target_lang`.** Saves the round trip and
+  the characters.
+- **Never block the pipeline on failure.** Retry with backoff, then publish with
+  `target_text = None` and `mt_error` set.
 
 ---
 
-## 5. Publisher → UI (WebSocket, JSON)
+## 6. Publisher → UI (WebSocket, JSON)
+
+The Publisher **joins** each `Translation` back to its `Sentence` by
+`sentence_id`. `Translation` deliberately carries only what the translator
+produced; the caption's `utterance_id`, `preceding_silence_ms` and `closed_by`
+come from the `Sentence` side of that join.
 
 Server → browser messages:
 
 ```jsonc
-// A finished caption
+// A finished caption. One SENTENCE, not one utterance (D29).
 { "type": "caption",
-  "id": "u_0042",
+  "id": "u_0042.s1",                  // sentence-scoped
+  "utterance_id": "u_0042",
   "source_text": "¿Me escuchan bien?",
-  "target_text": "Can you hear me okay?",
+  "target_text": "Can you hear me okay?",   // null if translation failed (D31)
+  "mt_error": null,
   "source_lang": "es",
   "target_lang": "en",
-  "preceding_silence_ms": 1240,
+  "preceding_silence_ms": 1240,       // first sentence of the utterance only; 0 after
   "closed_by": "silence",
-  "latency_ms": { "asr": 0, "mt": 0, "total": 0 } }
+  "latency_ms": { "asr": 0, "mt": 0, "word_age": 0 } }
 
 // Live speaking indicator — high frequency, no persistence
 { "type": "vad", "speaking": true }
@@ -147,8 +230,23 @@ Server → browser messages:
 // Detected source language, awaiting confirmation or override
 { "type": "language_detected", "lang": "es", "confidence": 0.98 }
 
+// Session state. Drives the UI's six defined states — see PRD.
+{ "type": "state",
+  "state": "loading",                 // idle|loading|listening|running|degraded|error
+  "detail": "Loading model (first run downloads weights)" }
+
+// Utterances discarded under backpressure (D28). The gap must be visible.
+{ "type": "dropped", "after_id": "u_0041.s2", "utterances": 1 }
+
 // Honest real-time health. Surface this in the UI.
-{ "type": "health", "queue_depth": 0, "rtf": 0.41 }
+{ "type": "health",
+  "queue_depth": 0,
+  "rtf": 0.41,
+  "word_age_ms": 6100,                // the D25 number, measured — not RTF
+  "effective_max_utterance_ms": 4000, // shrinks under load (D28); shown so
+                                      // adaptation is observable, not mysterious
+  "chars_used": 12840,
+  "chars_budget": 500000 }
 ```
 
 Browser → server messages:
@@ -166,6 +264,16 @@ Browser → server messages:
 near zero you are keeping up; if it grows, RTF has gone above 1 and the app is
 falling progressively further behind.
 
-It costs almost nothing to expose and it is the single honest metric for the
-DoD's real-time requirement. A graph of it across a ten-minute session is
-evidence for the journey doc rather than a claim.
+`word_age_ms` is the one the DoD actually asks about. **RTF is a stability
+metric, not a latency metric** (D25): it says the queue will not diverge, not
+that the captions are close to the speaker. A configuration can hold RTF at 0.4
+and still put the first word of a caption twelve seconds behind. Publish both.
+
+```
+word_age = silence_threshold + MT_roundtrip + D × (1 + RTF)
+```
+
+These cost almost nothing to expose and together they are the honest answer to
+the DoD's real-time requirement. A graph of them across a ten-minute session is
+evidence for the journey doc rather than a claim — see D34 for the JSONL log
+that produces it.

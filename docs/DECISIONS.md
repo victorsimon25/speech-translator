@@ -273,3 +273,225 @@ yields identical frames and no downstream stage contains a sample-rate branch.
 **Why it is worth stating:** resampling in the wrong place is a classic source of
 "it works with my test WAV but not live," because the WAV was already 16 kHz and
 the live device never is.
+
+---
+
+## 2026-08-18 — Session 3 (system design requirements)
+
+### D25. The project had a stability requirement, not a latency requirement
+`BENCHMARK.md` gated on sustained **RTF < 0.5**. That gate guarantees the queue
+does not diverge. It says nothing about how far behind the captions are, and the
+DoD's "latency should be minimal" was never given a number — so a configuration
+could pass every stated gate and still be unusable.
+
+The arithmetic that was missing:
+
+```
+lag_after_speech_ends = silence_threshold + (RTF × D) + MT_roundtrip
+word_age              = silence_threshold + MT_roundtrip + D × (1 + RTF)
+```
+
+`D` is the utterance duration, bounded by `max_utterance_ms`.
+
+**The finding:** at the previous defaults (`max_utterance_ms` 6000–8000,
+`silence_threshold_ms` 700, RTF 0.4, MT 300 ms), the first word of a caption
+appears **12.2 s** after it was spoken. Every existing gate passes. That is a
+subtitled recording, not a meeting anyone can participate in.
+
+**Two consequences that are not obvious from RTF alone:**
+1. `max_utterance_ms` is the dominant latency knob, not RTF.
+2. RTF pays **twice** — it multiplies `D`. So the benchmark should select the
+   *fastest model that is accurate enough*, not the largest that fits in VRAM.
+   That is a different selection rule than `BENCHMARK.md` was written around,
+   and it is amended there (D26's gate).
+
+**Target chosen: p95 word age < 7 s.** Solving for `D` at the worst permitted
+RTF, with `silence = 600 ms` and `MT = 300 ms`:
+
+```
+D ≤ (7.0 − 0.6 − 0.3) / (1 + 0.5) = 4.07 s
+```
+
+| | RTF 0.4 | RTF 0.5 (the gate) |
+|---|---|---|
+| lag after speech ends | 2.5 s | 2.9 s |
+| word age | 6.5 s | 6.9 s |
+
+**Derived config — these values are now derived, not placeholder ranges:**
+
+| Key | Value | Supersedes |
+|---|---|---|
+| `silence_threshold_ms` | 600 | D12's "start around 500–800" |
+| `max_utterance_ms` | 4000 | **D12's "start around 6000–8000"** |
+| `min_utterance_ms` | 300 | new (D30) |
+| `max_utterance_floor_ms` | 2000 | new (D28) |
+| `asr_queue_maxsize` | 4 | new (D28) |
+
+**D12 is not edited.** Its reasoning — that pause-only segmentation has an
+unbounded worst case, and that the two numbers are where tuning time goes —
+remains correct and is the reason a cap exists at all. What changed is that the
+cap now has a derivation instead of an intuition. This is the same practice D16
+established for D6.
+
+### D26. `BENCHMARK.md` gains a third gate: p95 word age < 7 s
+Sustained RTF < 0.5 and the VRAM ceiling both stay. The third gate is what makes
+D25's target testable rather than aspirational, and it is measured end to end at
+`max_utterance_ms = 4000` — not inferred from RTF, because MT round-trip and
+queue wait are real and are not in the RTF number.
+
+**Why a third gate rather than tightening the RTF one:** they measure different
+failures. RTF answers "does this diverge"; word age answers "is this usable".
+A model can pass either while failing the other, and collapsing them into one
+number would hide which one broke.
+
+### D27. Exactly two processes; translation stays with the server, not the GPU
+D15 requires transcription to run in a separate process. It does not say what
+else moves, and the answer is **nothing**.
+
+- **Main process** (asyncio): WebSocket server, capture thread, Silero VAD +
+  Segmenter, sentence splitter, translation client, publisher.
+- **Worker process**: `faster-whisper` only. Owns the CUDA context and nothing
+  else.
+
+**Why VAD stays in the main process:** Silero costs ~1 ms per 32 ms frame (~3% of
+one core, D23) and PyAudio's blocking read releases the GIL. The GIL problem D15
+identified is specific to a multi-second CPU-bound Whisper call; a 1 ms model
+does not reproduce it. A third process would buy nothing and add an IPC hop to
+the latency budget D25 just defined.
+
+**Why translation does not move to the worker:** it is network-bound. Putting it
+behind the GPU would idle the GPU for the duration of every round trip — the
+scarcest resource waiting on the least scarce one.
+
+**Windows consequence that binds the code:** Windows uses `spawn`, not `fork`
+(D22 covers the dev/test split; this is the runtime half). The worker re-imports
+the package and loads the model cold — roughly 5–15 s, and the first run
+downloads weights. This needs an explicit **ready handshake** before the UI
+reports "running", or pressing Start looks like a hang. Designed for now rather
+than discovered on the demo machine.
+
+### D28. Backpressure: adaptive shrink, then drop the oldest
+Bounded `Segmenter → Transcriber` queue, `maxsize = 4` (≈16 s of backlog — past
+the D25 budget already, so it is a ceiling, not an operating point).
+
+Policy, in order:
+
+1. **Shrink.** `queue_depth ≥ 2` for 3 consecutive utterances → cut the effective
+   `max_utterance_ms` by 25%, floor 2000. Shorter utterances cost less ASR each
+   and drain the queue.
+2. **Recover.** `queue_depth == 0` and RTF EMA < 0.35 for 30 s → grow back 25%,
+   ceiling = configured value. Hysteresis both ways so it cannot flap.
+3. **Drop.** Queue full → drop the **oldest** pending utterance, emit a `dropped`
+   event.
+4. **Signal.** Any shrink or drop puts the UI into a visible degraded state.
+
+**Why drop the oldest rather than the newest:** a stale caption has no value. The
+user is trying to follow a live conversation; handing them what was said 20 s ago
+while the speaker has moved on is worse than a visible gap.
+
+**Why shrink before dropping:** shrinking degrades translation quality slightly
+(more mid-sentence cuts, the D12 tradeoff) but loses nothing. Dropping loses
+content. Try the reversible degradation first.
+
+**Why an unbounded queue was rejected:** it converts a transient GPU hiccup into
+permanently growing lag with no recovery path, and it does so silently. The
+current effective `max_utterance_ms` is published in the `health` message so the
+adaptation is observable rather than mysterious.
+
+### D29. The caption unit is the sentence, with fragment carry-over
+D12 accepted that `closed_by = "max_length"` cuts mid-sentence, and that a
+translator handed half a sentence cannot know what the sentence is. With
+`max_utterance_ms` now 4000 (D25), max-length closes are *more* frequent, so
+that accepted cost got larger and is worth paying down.
+
+- Split the transcript on sentence boundaries.
+- Complete sentences are translated and published **immediately**.
+- The trailing fragment is held and prepended to the next utterance's text
+  before splitting again.
+
+**Why this is free:** only the fragment waits. Complete sentences are not delayed
+at all, so it improves MT quality without spending any of the D25 budget.
+
+**Required detail — the flush rule.** A held fragment must be flushed when
+silence exceeds `2 × silence_threshold_ms`, on `stop`, or at session end.
+Without it, the last words spoken in a meeting are held forever and never
+appear. This is the obvious bug in the design and it is written down so it is
+built, not found.
+
+`preceding_silence_ms` attaches to the **first** sentence derived from an
+utterance; later sentences carry 0.
+
+### D30. Hallucination guard, because Silero reduces the input but does not clean it
+Whisper emits confident garbage on near-silence — "Thank you.", subtitle-credit
+boilerplate. D23 chose Silero partly to cut these, and it does cut them, but a
+400 ms cough or a notification chime still gets through and still produces a
+caption on screen that nobody said.
+
+Reject a transcript when **any** of:
+- the utterance is shorter than `min_utterance_ms` (300),
+- `no_speech_prob` is above threshold,
+- `avg_logprob` is below threshold.
+
+**Contract consequence:** `Transcript` must carry `no_speech_prob` and
+`avg_logprob`. `faster-whisper` returns both per segment at no cost, but they
+have to be plumbed through, so they belong in `INTERFACES.md` rather than being
+read off the model object at the point of use.
+
+**Why this is a correctness requirement, not polish:** a fabricated caption is
+worse than a missing one. The user cannot tell it is fabricated — that is the
+whole point of the product — and they have no way to check.
+
+### D31. The translation budget is persisted, cached, and skippable
+D7 bought 500 000 characters/month, permanently free, not rolling over. Three
+requirements follow that an in-memory counter does not meet:
+
+- **Persist the counter** to a file keyed by month. Warn at 80%, hard-stop at a
+  configurable ceiling. A process restart must not reset it — the realistic way
+  to burn the demo budget is a testing loop across many runs, and an in-memory
+  counter cannot see that.
+- **LRU cache** on `(source_lang, target_lang, text)`. Short utterances repeat
+  constantly in meetings ("okay", "yes", "thank you", "can you hear me"). Free
+  characters and free latency.
+- **Skip translation entirely when source == target.** Saves a round trip and
+  the characters, and it is the common case the moment the user picks English
+  while an English speaker is talking.
+
+**Also:** a translation failure must never block the pipeline. Retry with
+backoff, then publish the caption with `target_text = null` and an error flag.
+The UI falls back to source-only — which is the reason source text is on the
+card at all (D33).
+
+### D32. Language identification accumulates over a window, then locks
+`INTERFACES.md` said language is "detected on the first utterance… then locked".
+With `max_utterance_ms` at 4000 (D25) the first utterance can be 800 ms of
+"okay, hi" — and locking the whole session's language on that is a coin flip.
+
+Accumulate Whisper's LID over the first **~10 s of speech** (not wall clock —
+silence must not count), weight each vote by its confidence, then lock. Manual
+override stays available at any time, as the PRD already requires.
+
+**Why not just never lock:** re-running LID per utterance costs real GPU time,
+and worse, it makes the source language flicker mid-meeting on a short or noisy
+utterance, which changes the translation direction and produces visible
+nonsense.
+
+### D33. Caption cards show translation primary, source secondary
+Target text large, source text small beneath it, toggleable.
+
+**Why carry the source at all when the brief asks for translated text:** it is
+the only way the user can tell an ASR error from an MT error. When a caption
+reads oddly, "the model misheard the word" and "the model mistranslated the
+word" call for different reactions, and without the source both look like the
+app being wrong. It also gives D31's translation-failure path somewhere to
+degrade to instead of a blank card, and it serves the partially-bilingual user,
+who is a plausible real user of this product.
+
+### D34. One JSONL timing log per session
+One record per utterance: `t_speech_end, t_queued, t_asr_start, t_asr_end,
+t_mt_end, t_sent, duration_ms, queue_depth, rtf, chars`.
+
+**Why it is worth a decision entry:** this single file is the latency histogram,
+the RTF curve, the throttling curve and the queue-depth graph — i.e. the entire
+evidence base for the DoD's real-time claim and for the D25/D26 gates. It costs
+roughly twenty lines. Building it after the fact means re-running every
+measurement to get the numbers the journey doc needs.

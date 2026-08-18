@@ -89,12 +89,49 @@ beside the meeting.
 - [ ] Captures system audio on **Windows**, verified on the demo machine.
 - [ ] Source language auto-detected, displayed, and overridable.
 - [ ] Target language selectable from a fixed set.
-- [ ] Captions appear with minimal latency and do not visibly rewrite themselves.
+- [ ] Captions do not visibly rewrite themselves (D11).
+- [ ] **p95 word age below 7 s** — the time between a word being spoken and
+      appearing on screen. This replaces "minimal latency", which was
+      unmeasurable and would have been declared met by a 12-second
+      configuration (D25).
 - [ ] Output text is correctly punctuated.
-- [ ] The UI needs no explanation to use.
-- [ ] Sustained real-time factor stays below 1.0 for the length of a demo — the
-      app must not fall progressively further behind.
+- [ ] The UI needs no explanation to use, and each of the six defined states
+      below renders distinctly.
+- [ ] Sustained real-time factor stays below 0.5 for the length of a demo — the
+      app must not fall progressively further behind. **Necessary but not
+      sufficient**: RTF is a stability metric, word age is the latency one.
 - [ ] Journey doc with prompts, screenshots, and assessment of LLM output.
+
+### On "minimal latency"
+
+The brief asks for it and does not define it, so it is defined here (D25):
+
+```
+word_age = silence_threshold + MT_roundtrip + max_utterance_ms × (1 + RTF)
+```
+
+The target of ~7 s is what makes it possible to follow a conversation roughly
+one beat behind. It is what sets `max_utterance_ms = 4000`, and it is measured
+end to end rather than inferred from RTF.
+
+### UI states
+
+"Clear for the user without any additional explanation" is only testable if the
+states are enumerated. Each renders distinctly:
+
+| State | Trigger | Shown |
+|---|---|---|
+| `idle` | before Start | target-language picker, Start |
+| `loading` | worker spawning / model loading | progress, "first run downloads the model" |
+| `listening` | running, no speech | speaking indicator off, "listening" |
+| `running` | speech flowing | captions + speaking indicator |
+| `degraded` | backpressure shrink or drop active (D28) | amber badge, current lag, visible gap markers |
+| `error` | no loopback device, CUDA OOM, fatal | plain message + recovery action |
+
+Caption cards show **translation primary, source secondary** (D33): target text
+large, source text small beneath it, toggleable. The source is what lets a user
+tell a mishearing from a mistranslation, and it is where a failed translation
+degrades to instead of a blank card.
 
 ## User inputs
 
@@ -105,7 +142,7 @@ answer is deliberately small:
 |---|---|---|
 | Target language | **Yes** | Cannot be inferred. The one genuinely necessary input. |
 | Audio device | Once | Defaults to the system output monitor; only shown if there is more than one candidate. |
-| Source language | **No — suggested** | Auto-detected and displayed as a correctable suggestion, not a question. Locked after confirmation. |
+| Source language | **No — suggested** | Auto-detected over a short window and displayed as a correctable suggestion, not a question (D32). Locked after confirmation, overridable at any time. |
 
 The design principle: ask for exactly one thing, infer the rest, and make every
 inference visible and correctable.
