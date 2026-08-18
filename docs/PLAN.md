@@ -14,8 +14,8 @@ dev laptop no matter how finished the code looks.
 
 | Level | Name | Build on | Status |
 |---|---|---|---|
-| 0 | Foundation | both | not started |
-| 1 | Audio capture | Linux code / Windows verify | not started |
+| 0 | Foundation | both | **done on Linux; Windows half unverified** |
+| 1 | Audio capture | Linux code / Windows verify | next |
 | 2 | Segmentation | Linux | not started |
 | 3 | **Benchmark (gate)** | **Windows only** | not started |
 | 4 | Transcription | Linux code / Windows run | not started |
@@ -41,11 +41,23 @@ is missing on either.
 - `python -m speech_translator.doctor` (D40).
 
 **Acceptance**
-- [ ] `uv sync` succeeds on Linux **and** Windows from the same lockfile.
-- [ ] `import speech_translator` succeeds on Linux (D22 — no eager Windows imports).
-- [ ] `doctor` runs on both and reports honestly: on Linux, CUDA and loopback
+- [x] `uv sync` succeeds on Linux **and** Windows from the same lockfile.
+      *Linux: verified, 40 packages. Windows: not yet run — the lock carries a
+      `win_amd64` wheel or an sdist for all 45 packages (checked
+      programmatically), and `required-environments` makes that a lock-time
+      guarantee, but the run itself is owed on the demo machine.*
+- [x] `import speech_translator` succeeds on Linux (D22 — no eager Windows imports).
+- [x] `doctor` runs on both and reports honestly: on Linux, CUDA and loopback
       report **fail** and that is the correct output, not a bug.
-- [ ] `pip list | grep torch` returns nothing.
+      *Linux verified; Windows run owed. Expected failures are labelled and do
+      not set the exit code, so a red line on the dev box stays distinguishable
+      from a red line on the demo machine.*
+- [x] `pip list | grep torch` returns nothing. *Also: the string `torch` does not
+      appear anywhere in `uv.lock`.*
+
+**Carried to Level 1** (needs the Windows machine, nothing here blocks on it):
+`uv sync` + `doctor` on Windows. Until then Level 0 is done on one of its two
+platforms.
 
 **Unblocks** everything. **Risk:** low.
 

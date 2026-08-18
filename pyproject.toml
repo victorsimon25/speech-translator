@@ -1,0 +1,60 @@
+[project]
+name = "speech-translator"
+version = "0.1.0"
+description = "Real-time speech translator for online meetings: system-audio capture, local Whisper on CUDA, browser captions."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+
+# Runtime dependencies. Platform-specific ones carry environment markers so a
+# single uv.lock installs on both machines (D22, D39).
+dependencies = [
+    # ASR. CTranslate2 comes in via faster-whisper but is imported directly by
+    # doctor.py, so it is declared rather than inherited.
+    "faster-whisper>=1.1.0",
+    "ctranslate2>=4.5.0",
+    # VAD: onnxruntime only. The silero-vad package is NOT a dependency — it
+    # imports torch unconditionally (D35). The weights are vendored in assets/.
+    "onnxruntime>=1.20",
+    "numpy>=2.0",
+    # Audio format normalisation inside the AudioSource (D24). Streaming
+    # resampler, so filter state carries across chunks.
+    "soxr>=0.5",
+    # Translation over REST + API key, not the gRPC client library (D37).
+    "httpx>=0.28",
+    # Server + UI in one process; UI is vanilla HTML/CSS/JS, no build step (D38).
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
+    "websockets>=14.0",
+    "python-dotenv>=1.0",
+    # --- Windows only ---------------------------------------------------
+    # WASAPI loopback capture (D3). Imported lazily so the package still
+    # imports on Linux (D22).
+    "pyaudiowpatch>=0.2.12.7; sys_platform == 'win32'",
+    # CTranslate2's CUDA dependencies, taken from the pip wheels rather than
+    # hand-copied DLLs so they are pinned by the lockfile (D41).
+    "nvidia-cublas-cu12>=12.4; sys_platform == 'win32'",
+    "nvidia-cudnn-cu12>=9.1,<10; sys_platform == 'win32'",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["speech_translator"]
+
+[tool.uv]
+# Resolve wheels for both machines at lock time, so "it resolves on Linux" is
+# not the only thing the lockfile proves (D39).
+required-environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sys_platform == 'win32' and platform_machine == 'AMD64'",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

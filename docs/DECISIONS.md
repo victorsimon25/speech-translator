@@ -614,3 +614,94 @@ the code.
 | Default output device changes mid-session (headphones) | detect the stream error and surface `error` state with a re-select action rather than dying silently |
 | CRLF/LF across two machines | `.gitattributes` with `* text=auto eol=lf` |
 | Port already in use | port is config, not a literal |
+
+---
+
+## 2026-08-18 — Session 5 (Level 0, foundation)
+
+### D42. UTF-8 is forced at package import, not at each entry point
+D41 requires UTF-8 on every output stream and log file. The obvious
+implementation is a call at the top of each `main()`, and the obvious failure is
+the entry point that forgets — most likely the transcription worker, which on
+Windows is `spawn`ed and re-imports the package as a fresh interpreter (D27).
+
+`force_utf8()` therefore runs in `speech_translator/__init__.py`. Importing the
+package is the one thing every process does, so the mitigation cannot be
+skipped by a new entry point that nobody remembered to update.
+
+**Two details that are choices, not accidents:**
+- `errors="replace"`, not `strict`. A console that genuinely cannot render a
+  glyph should print a replacement character; killing the capture thread over a
+  font is a worse outcome than a mangled character.
+- Reconfiguration failures are swallowed. Under pytest capture or a binary pipe
+  there is nothing to reconfigure, and that is not an error condition.
+
+The regression test reproduces the Windows console on Linux by forcing a
+`cp1252` stdout in a subprocess and printing a Spanish and a Japanese string.
+Without `force_utf8()` that child raises `UnicodeEncodeError`; with it, it
+passes. The cp1252 risk is now tested on the machine that cannot reproduce it
+naturally.
+
+### D43. The CUDA pip wheels are necessary but not sufficient on Windows
+D41 sources cuBLAS and cuDNN from `nvidia-cublas-cu12` / `nvidia-cudnn-cu12`
+rather than hand-copied DLLs, because wheels are pinned by the lockfile. Found
+while building `doctor`: installing them does not make them **loadable**. The
+wheels unpack to `site-packages/nvidia/<component>/bin`, and nothing puts those
+directories on the Windows DLL search path. PyTorch does this for its users;
+CTranslate2 does not, and we deliberately have no torch (D35).
+
+The symptom would have been `import ctranslate2` failing with a bare
+"DLL load failed while importing translator", on the demo machine, pointing at
+CTranslate2 rather than at the missing cuDNN — exactly the diagnosis-at-a-
+distance D40 exists to prevent.
+
+**Decision:** `speech_translator/windows_cuda.py` walks the installed `nvidia`
+namespace package and calls `os.add_dll_directory()` for each `bin` directory
+holding DLLs. No-op on Linux; safe to import anywhere (D22). It must be called
+**before** the first `import ctranslate2` — in `doctor`, and in the worker
+process at Level 4, which re-imports everything from scratch under `spawn`.
+
+Recorded because the fix is invisible: if it is ever deleted, everything still
+works on Linux and the failure appears only on the machine that matters.
+
+### D44. `doctor` grades a failure by whether this platform can pass it
+Half of `doctor`'s checks — CUDA, the cuDNN DLLs, WASAPI loopback — cannot pass
+on the Linux dev box, by design (D17, D22). If those printed as ordinary
+failures, the dev-box run would show a wall of red every time and stop being
+read, which defeats the point of building it in step 1.
+
+Each check is therefore tagged `windows_only`. Such a check still prints
+**FAIL** on Linux — the honest answer, and the one asked for — but it is
+labelled "expected here" and excluded from the exit code. So:
+
+- Linux, healthy: red lines, exit 0.
+- Windows, healthy: no red lines, exit 0.
+- Either machine, genuinely broken: red lines and exit 1.
+
+This keeps `doctor` usable as a CI-style gate on the demo machine while staying
+truthful on the dev machine, instead of picking one at the cost of the other.
+
+`doctor` also grades two things as **WARN**, not FAIL: an unselected
+`model_size`/`compute_type` (correct until Level 3 runs — D20) and absent
+Whisper weights (correct until the first run downloads them). A preflight that
+cries wolf about the expected state of an unfinished project is a preflight
+people stop running.
+
+### D45. The lockfile is verified for both platforms at lock time
+D39 committed `uv.lock` so both machines resolve identically. A lockfile
+produced on Linux can still be missing Windows wheels for a package it happens
+to resolve from source locally, and that would be discovered on the demo
+machine.
+
+Two things close it:
+- `[tool.uv] required-environments` names both
+  `linux/x86_64` and `win32/AMD64`, so `uv lock` fails rather than producing a
+  lock that cannot install on Windows.
+- `requires-python = ">=3.12,<3.13"`. An unbounded ceiling lets the Windows box
+  resolve a different Python and therefore different wheels; `uv` will fetch a
+  matching 3.12 there rather than "whatever is installed" deciding it.
+
+Verified: all 45 locked packages carry a `win_amd64` wheel, a pure-Python wheel,
+or an sdist — including `ctranslate2`, `onnxruntime`, `av`, `tokenizers`,
+`soxr`, `pyaudiowpatch` and both `nvidia-*` packages. This is evidence, not
+proof; the proof is `uv sync` on Windows, which is owed.

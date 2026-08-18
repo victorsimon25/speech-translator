@@ -1,6 +1,6 @@
 # State
 
-_Last updated: 2026-08-18 (session 4 — stack confirmation and portability)_
+_Last updated: 2026-08-18 (session 5 — Level 0 built)_
 
 ## Done
 - Requirements and architecture agreed (see `DECISIONS.md`).
@@ -40,16 +40,37 @@ _Last updated: 2026-08-18 (session 4 — stack confirmation and portability)_
   - Portability register with mitigations (D41) — including that the Windows
     console is cp1252 and will crash on printing a non-ASCII caption.
 - Repo initialised, docs written.
+- **Level 0 (Foundation) built and passing on Linux.** First application code.
+  - `pyproject.toml` + committed `uv.lock` — 45 packages, **zero torch**, and
+    every package has a `win_amd64` wheel or an sdist. `required-environments`
+    pins both platforms at lock time, so a Linux-only resolution cannot pass
+    silently (D39).
+  - `speech_translator/` package: `config.py` (D25 values, `model_size` and
+    `compute_type` deliberately `None` until Level 3), `logging_setup.py`
+    (UTF-8 forced at package import, so no entry point can forget it),
+    `windows_cuda.py`, `doctor.py`, `__main__.py` stub.
+  - `assets/silero_vad.onnx` vendored with its MIT license and a provenance
+    note; `doctor` re-measures it — **0.109–0.150 ms per 32 ms frame** here,
+    consistent with D35's 0.156.
+  - `doctor` runs 14 checks. On Linux: 7 pass, 3 expected-fail (CUDA, cuDNN
+    DLLs, WASAPI loopback), 1 warn (no model chosen yet), 1 real fail (no API
+    key yet). Expected failures are labelled and excluded from the exit code.
+  - 16 tests pass on Linux with no GPU, no audio hardware, no network.
 
 ## Next
 
-**Level 0 — Foundation.** See [`PLAN.md`](PLAN.md) for the full ladder and this
-level's acceptance criteria.
+**Level 1 — Audio capture.** See [`PLAN.md`](PLAN.md) for the full ladder and
+each level's acceptance criteria.
+
+**First, on the Windows machine:** `git pull && uv sync && python -m
+speech_translator.doctor`. That is the other half of Level 0's acceptance and it
+cannot be done from here (D22). Expect CUDA, cuDNN and loopback to flip to PASS;
+if `uv sync` disagrees with the lockfile, that is a finding, not a formality.
 
 | Level | | Status |
 |---|---|---|
-| 0 | Foundation — skeleton, `uv.lock`, vendored ONNX, `doctor` | **next** |
-| 1 | Audio capture — `AudioSource`, WASAPI + WAV, capture tools | |
+| 0 | Foundation — skeleton, `uv.lock`, vendored ONNX, `doctor` | **done (Linux); Windows run owed** |
+| 1 | Audio capture — `AudioSource`, WASAPI + WAV, capture tools | **next** |
 | 2 | Segmentation — Silero VAD, `Utterance` | |
 | 3 | **Benchmark (gate)** — Windows only; picks model + `compute_type` | |
 | 4 | Transcription — worker process, hallucination guard, LID | |
@@ -68,15 +89,28 @@ costs nothing and gives the benchmark a real capture path to source its sample
 audio from.
 
 ## In progress
-Nothing. No application code exists yet.
+Nothing. Level 0 is complete on Linux; its Windows verification is the first
+task of the next session on that machine.
 
 ## Blocked
+- **Level 0's Windows half is unverified.** `uv sync` and `doctor` have not run
+  on the demo machine. Not blocking Levels 1–2, which are Linux work, but it is
+  blocking in the sense that the lockfile's cross-platform claim is currently
+  argued rather than demonstrated.
 - **Three truncated lines in the assignment brief** are still unknown — see
   `PRD.md`. The scope line gates whether incoming-only is permitted. Raised
   again in session 4 and still unanswered; it is the only open item that can
   invalidate work already designed.
 - **Deadline unknown.** The journey doc is due 48h before the interview, so the
   real deadline is earlier than the interview date.
+
+## Known environment quirks (dev box only)
+- The Linux laptop exports `PYTHONPATH=/opt/ros/jazzy/lib/python3.12/site-packages`
+  globally. pytest autoloads a ROS plugin from it and dies before collection.
+  Run tests as `PYTHONPATH= uv run pytest`. Deliberately **not** worked around in
+  project config — it is a property of this machine, not of the project, and
+  hard-coding a ROS-specific opt-out into `pyproject.toml` would outlive the
+  reason for it.
 
 ## Open questions
 - Which reading of the silence/punctuation bonus is intended (correct

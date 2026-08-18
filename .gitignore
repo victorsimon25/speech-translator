@@ -7,3 +7,4 @@ venv/
 *.mp3
 models/
 .DS_Store
+var/

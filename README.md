@@ -4,10 +4,12 @@ Real-time captions for online meetings. It captures **system audio** — whateve
 your speakers are playing — transcribes it locally on the GPU, translates it, and
 shows running captions in a browser window beside the meeting.
 
-> **Status: design complete, no application code yet.** 41 recorded decisions,
-> contracts frozen, build ladder defined. See [`docs/STATE.md`](docs/STATE.md)
-> for where things stand and [`docs/PLAN.md`](docs/PLAN.md) for what gets built
-> next. The usage section below describes the **target** interface.
+> **Status: Level 0 (foundation) built; the pipeline itself is not.** 45 recorded
+> decisions, contracts frozen, build ladder defined. `uv sync`, the vendored VAD
+> and `doctor` work on Linux; capture, ASR, translation and the UI are Levels 1–6.
+> See [`docs/STATE.md`](docs/STATE.md) for where things stand and
+> [`docs/PLAN.md`](docs/PLAN.md) for what gets built next. Commands below marked
+> *(not yet built)* describe the **target** interface.
 
 ## Why system audio
 
@@ -112,22 +114,40 @@ behind.
 - 500 000 translated characters/month, no roll-over. The counter is persisted
   across restarts, because the realistic way to burn it is a testing loop (D31).
 
-## Usage *(target interface — not yet built)*
+## Usage
 
 ```bash
 uv sync                                   # identical versions on both machines
 cp .env.example .env                      # add GOOGLE_TRANSLATE_API_KEY
 
-python -m speech_translator.doctor         # preflight: CUDA, cuDNN, model cache,
-                                           # loopback device, credentials
-python -m speech_translator.tools.list_devices
-python -m speech_translator.tools.record_loopback sample.wav --seconds 600
+python -m speech_translator.doctor        # preflight: UTF-8, lockfile, no-torch,
+                                          # CUDA, cuDNN DLLs, vendored VAD,
+                                          # loopback device, credentials
+python -m speech_translator.doctor --no-net   # skip the live translation call
+python -m speech_translator.doctor --json     # machine-readable
 
-python -m speech_translator                # then open http://localhost:8000
+# --- not yet built ---------------------------------------------------------
+python -m speech_translator.tools.list_devices          # Level 1
+python -m speech_translator.tools.record_loopback ...   # Level 1
+python -m speech_translator                             # Level 6 → localhost:8000
 ```
 
 Run `doctor` first after every `git pull` on the Windows machine. It exists so a
-failure names itself instead of surfacing three layers away (D40).
+failure names itself instead of surfacing three layers away (D40). On Linux it
+reports CUDA, cuDNN and loopback as **FAIL** — that is the correct output on a
+machine that is not the target, and those failures do not set the exit code
+(D44).
+
+### Tests
+
+```bash
+uv run pytest
+```
+
+On the Linux dev laptop, ROS is on the global `PYTHONPATH` and pytest autoloads
+a broken plugin from it; run `PYTHONPATH= uv run pytest` there. That is a
+property of that machine, not of this project, so it is not worked around in
+`pyproject.toml`.
 
 ## Repo layout
 
@@ -137,10 +157,15 @@ docs/
   PLAN.md          the build ladder — levels 0-8, each with acceptance criteria
   STATE.md         where we are right now  ← read first
   INTERFACES.md    module contracts; read only the stage you're touching
-  DECISIONS.md     why things are the way they are (append-only, D1-D41)
+  DECISIONS.md     why things are the way they are (append-only, D1-D45)
   BENCHMARK.md     the Whisper measurement that picks model + compute_type
   journey/         prompts, LLM assessments, and what was learned — graded
-speech_translator/ application code (not yet written)
+speech_translator/ application code
+  config.py        the D25 values; model_size/compute_type stay None until L3
+  doctor.py        preflight (D40)
+  logging_setup.py UTF-8 forced at package import (D41, D42)
+  windows_cuda.py  puts the wheel CUDA DLLs on the loader path (D43)
+assets/            vendored silero_vad.onnx + its MIT license (D35)
 tests/
 ```
 
