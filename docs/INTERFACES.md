@@ -9,8 +9,8 @@ this file is wrong and should be fixed.
 
 ```
 AudioSource → Segmenter → Transcriber → Translator → Publisher → UI
- (platform)     (VAD +      (Whisper,     (Google      (WebSocket)  (browser)
-                max-len)     local CPU)    Cloud)
+ (WASAPI)      (Silero VAD  (Whisper,     (Google      (WebSocket)  (browser)
+               + max-len)    local CUDA)   Cloud)
              └──────────┘  └────── separate process (GIL) ──────┘
 ```
 
@@ -31,17 +31,19 @@ class AudioSource(Protocol):
 
 **Frame format — fixed across all implementations:**
 - 16 000 Hz, mono, signed 16-bit little-endian PCM
-- Fixed-size chunks. Size is dictated by the VAD: Silero wants 512 samples
-  (32 ms); WebRTC VAD wants 10/20/30 ms. Pick the VAD first, then fix the frame
-  size to match and do not vary it.
+- **512-sample frames (32 ms).** Settled: the VAD is Silero, which wants 512
+  samples at 16 kHz (D23). Do not vary it.
+- Normalisation is the **source's** job (D24). WASAPI loopback delivers the
+  device's native format — usually 48 kHz stereo — so downmix and resample
+  happen inside the source. No downstream stage contains a sample-rate branch.
 
 **Implementations:**
 
 | Class | Platform | Backing |
 |---|---|---|
-| `PipeWireMonitorSource` | Linux | PipeWire monitor of the default sink — verified available (D2) |
-| `WasapiLoopbackSource` | Windows | `PyAudioWPatch` WASAPI loopback (D3) |
-| `WavFileSource` | any | Reads a WAV at wall-clock speed. **Use this for tests** — deterministic, no live audio needed |
+| `PipeWireMonitorSource` | Linux | **Not implemented (D17).** Path verified available in D2; descoped when Windows became the target |
+| `WasapiLoopbackSource` | Windows | `PyAudioWPatch` WASAPI loopback (D3). **The live source.** Import is lazy so the package still imports on Linux (D22) |
+| `WavFileSource` | any | Reads a WAV at wall-clock speed, or as fast as possible with `realtime=False`. **Use this for tests** and as the Linux smoke path (D22) |
 | `MicrophoneSource` | future | Only if two-way is required (D4) |
 
 Source selection happens once at startup and is the *only* place platform
@@ -91,7 +93,8 @@ class Transcript:
     asr_ms: int                # wall-clock; used to compute RTF at runtime
 ```
 
-- Model size is decided by `BENCHMARK.md`. Do not hard-code one before that runs.
+- Model size, `device` and `compute_type` are all decided by `BENCHMARK.md` and
+  read from config. Do not hard-code them before that runs (D20).
 - `language` is populated from Whisper's built-in language identification — no
   separate model. Detected on the first utterance, surfaced to the UI, then
   **locked** for the session unless the user overrides (see PRD, user inputs).

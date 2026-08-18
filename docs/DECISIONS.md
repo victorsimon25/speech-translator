@@ -153,3 +153,123 @@ the journey doc, but not worth building for.
 Python's GIL means a CPU-bound Whisper call in a *thread* stalls the capture
 loop and drops audio frames. Separate process, queue between them. This is not
 an optimisation; it is a correctness requirement.
+
+---
+
+## 2026-08-18 — Session 2 (platform pivot)
+
+### D16. Target platform moves to the Windows machine (GTX 1650 Ti, 4 GB)
+The user has a Windows machine with an NVIDIA GTX 1650 Ti (4 GB GDDR6) and will
+build and demo there. Transcription moves from CPU to CUDA.
+
+**Why this is not a small change:** D6 recorded "the machine has no NVIDIA GPU,
+so *locally* means CPU," and that single fact drove D9, D11, and the existence of
+`BENCHMARK.md`. Every one of those is re-examined below rather than inherited.
+
+**D6 is deliberately not edited.** It is an accurate record of what was true and
+why the decision was made. Rewriting history to match the present would destroy
+the thing this file exists for.
+
+### D17. Linux descoped to the `AudioSource` interface only
+`PipeWireMonitorSource` will not be built. D2's verification of the PipeWire
+monitor path stays on the record as history — it was real, it just isn't the
+target any more.
+
+**Why:** one platform tested properly beats two tested half-way before a
+deadline. The `AudioSource` Protocol (D4) already makes Linux a later addition
+rather than a rewrite, which is exactly the value the abstraction was bought for.
+
+**Cost, stated plainly:** the PRD's "runs on Linux and Windows, verified on both"
+line is now false and has been changed rather than left aspirational.
+
+### D18. VRAM replaces CPU throughput as the binding constraint
+4 GB is the ceiling, and the budget is **not** 4 GB: the Windows desktop
+compositor and the browser rendering our own caption UI both draw from the same
+pool. The benchmark must therefore be run with a browser open, because the demo
+has one.
+
+The failure mode changes with it — from "falls progressively further behind" to
+"CUDA OOM at model load or on a long utterance." The second is more abrupt and
+easier to miss in a short test.
+
+**Two properties of this specific GPU, to be measured rather than assumed:**
+TU117 is compute capability 7.5, so CTranslate2 supports both `float16` and
+`int8_float16`. But the GTX 16-series has **no tensor cores**, so "int8 is
+faster" — reliable on RTX parts — is not a given here.
+
+### D19. Distil-Whisper excluded from the model shortlist
+`distil-large-v3` and its successors are **English-only**. The entire product
+premise is transcribing a language the user does not speak, so an English-only
+model cannot serve the source side no matter how fast it is.
+
+**Recorded because it is a trap, not an oversight:** distil-whisper is the first
+suggestion anyone (human or LLM) makes when asked to speed up Whisper, and the
+benchmark numbers would look excellent right up until the demo language stopped
+being English. `large-v3-turbo` is the multilingual answer to the same question.
+
+### D20. `BENCHMARK.md` demoted from blocking gate to model-selection task
+`STATE.md` said, in bold, "do not build the pipeline before this number exists."
+That was correct when the question was **existential**: if Whisper could not keep
+up on a CPU, the architecture had to change, and building on top of an unproven
+assumption would have wasted the work.
+
+CUDA answers the existential question. Some model will clear real-time on a
+1650 Ti. What remains — *which* model, at which `compute_type` — is a value read
+from config at startup, not an architectural fork. So it no longer gates code
+that is independent of the model: audio capture and segmentation.
+
+**This is recorded rather than quietly ignored** because a doc that says "don't
+build yet" should be overruled explicitly, with the reasoning, or not at all.
+
+**Still true, still required:** the benchmark runs before the Transcriber is
+wired, and its sustained-throttling method stays — a laptop GPU has power and
+thermal limits just as the U-series CPU did.
+
+### D21. D9 and D11 stay closed until the benchmark says otherwise
+Both were decided on hardware grounds, so a hardware change is a legitimate
+reason to revisit them — but only with numbers. A 4 GB laptop part without tensor
+cores is a modest GPU, and diarization would want VRAM that the caption UI is
+already competing for. Reopening them on the general optimism that "we have a
+GPU now" would repeat exactly the assume-instead-of-measure mistake the
+benchmark exists to prevent.
+
+### D22. Development on Linux, testing on Windows, git as the bridge
+The user writes code on the Linux laptop and runs it on the Windows machine.
+
+**Consequences that bind the code, not just the workflow:**
+- Platform-specific dependencies carry environment markers
+  (`PyAudioWPatch; sys_platform == "win32"`), so one `requirements.txt` installs
+  on both machines.
+- Windows-only imports are **lazy**, inside the function that needs them. If
+  importing the package fails on Linux, the entire dev loop becomes
+  push-pull-run for every typo.
+- `WavFileSource` is the local smoke path, which is a second reason for it to
+  exist beyond the deterministic-testing one in D4.
+
+### D23. VAD is Silero, so the frame size is 512 samples / 32 ms
+`INTERFACES.md` required picking the VAD first and then fixing the frame size to
+match; this closes that. 16 kHz mono int16, 512-sample frames, never varied.
+
+**Why Silero over WebRTC VAD:** the input is a whole desktop's audio output —
+music, notification sounds, video stings, keyboard clicks. WebRTC VAD is an
+energy-and-spectrum heuristic and fires readily on all of it; Silero is a trained
+model and discriminates speech from non-speech far better. False positives here
+are not cosmetic: each one is a wasted Whisper call on the GPU that is the
+scarce resource (D18), plus a hallucinated caption on screen.
+
+**Cost:** an ONNX runtime dependency and roughly 1 ms of CPU per 32 ms frame.
+Cheap, and it is CPU work that no longer competes with transcription now that
+transcription is on the GPU.
+
+### D24. The source layer normalises audio; nothing downstream resamples
+WASAPI loopback delivers the output device's **native** format — typically
+48 kHz stereo, sometimes float32. Whisper and Silero both want 16 kHz mono
+int16.
+
+Downmix and resample happen **inside** `WasapiLoopbackSource`, so the
+`AudioSource` contract in `INTERFACES.md` is literally true: every implementation
+yields identical frames and no downstream stage contains a sample-rate branch.
+
+**Why it is worth stating:** resampling in the wrong place is a classic source of
+"it works with my test WAV but not live," because the WAV was already 16 kHz and
+the live device never is.

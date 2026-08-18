@@ -66,10 +66,13 @@ beside the meeting.
 - Transcribe speech to punctuated text.
 - Translate into a user-selected target language (3–5 supported).
 - Display captions in real time with minimal latency.
-- Run on Linux and Windows, tested on both.
+- Run on Windows (system audio via WASAPI loopback), tested there.
 
 **Out of scope**
 - Multi-user / multi-tenant scaling. Explicitly excluded by the user.
+- Linux support. Descoped once the Windows machine became the build and demo
+  target (D16, D17); it stays reachable as one more `AudioSource` implementation
+  rather than a rewrite, and the PipeWire path was already verified (D2).
 - Text-to-speech. Output is text only.
 - Outgoing (microphone) translation. The input layer is pluggable so this stays
   a small addition, but it is not being built.
@@ -83,7 +86,7 @@ beside the meeting.
 
 ## Definition of done
 
-- [ ] Captures system audio on Linux **and** Windows, verified on both.
+- [ ] Captures system audio on **Windows**, verified on the demo machine.
 - [ ] Source language auto-detected, displayed, and overridable.
 - [ ] Target language selectable from a fixed set.
 - [ ] Captions appear with minimal latency and do not visibly rewrite themselves.
