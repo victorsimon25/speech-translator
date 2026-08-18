@@ -1,6 +1,6 @@
 # State
 
-_Last updated: 2026-08-18 (session 6 — Level 1 built)_
+_Last updated: 2026-08-18 (session 7 — Level 2 built)_
 
 ## Done
 - Requirements and architecture agreed (see `DECISIONS.md`).
@@ -51,7 +51,9 @@ _Last updated: 2026-08-18 (session 6 — Level 1 built)_
     `windows_cuda.py`, `doctor.py`, `__main__.py` stub.
   - `assets/silero_vad.onnx` vendored with its MIT license and a provenance
     note; `doctor` re-measures it — **0.109–0.150 ms per 32 ms frame** here,
-    consistent with D35's 0.156.
+    consistent with D35's 0.156. *(Session 7: that timing was taken at the wrong
+    input width and the check could not fail on a dead model — corrected in D53.
+    At the right width it is 0.116–0.141 ms, still inside the budget.)*
   - `doctor` runs 14 checks. On Linux: 7 pass, 3 expected-fail (CUDA, cuDNN
     DLLs, WASAPI loopback), 1 warn (no model chosen yet), 1 real fail (no API
     key yet). Expected failures are labelled and excluded from the exit code.
@@ -78,13 +80,43 @@ _Last updated: 2026-08-18 (session 6 — Level 1 built)_
     Linux, leaving device open as the only genuinely Windows-only part (D48).
   - 34 new tests; **50 pass** on Linux with no GPU, no audio hardware, no
     network.
+- **Level 2 (Segmentation) built and passing on Linux.** Utterances, not frames.
+  - `speech_translator/segment/`: `SileroVad` over the vendored ONNX, the
+    `SpeechDetector` Protocol it satisfies, `Utterance` exactly as
+    `INTERFACES.md` §2 defines it, and `Segmenter` — close on silence or
+    max-length (D12) at the D25 values, with the D28 runtime override built
+    ahead of its caller. `tools/dump_utterances` is the inspection instrument.
+  - **The VAD was silently dead and nothing said so (D53).** The vendored file
+    is Silero **v5**, which needs 64 samples of the previous frame prepended to
+    the 512 new ones — a 576-wide call. `INTERFACES.md`, D35, `assets/README.md`
+    and `doctor` all said 512. The ONNX input dim is dynamic, so the wrong call
+    runs and returns **0.0005 on real recorded speech** where the right one
+    returns **1.0**. `doctor` passed it, because it only checked that the session
+    ran. All four are corrected; `doctor` now asserts speech > 0.9 and silence
+    < 0.1, so a dead VAD fails the preflight.
+  - Two pieces of state carry across a frame boundary, not one — the LSTM state
+    and the audio context. Both have a guard **and a control proving the guard
+    can see the bug**, the same discipline D46 applied one layer down.
+  - **Two labelled TUNABLE decisions**, not derived: thresholds 0.50 open /
+    0.35 release, with hysteresis rather than a single cut (D54), and pre-roll
+    128 ms / tail pad 192 ms (D55). No minimum-speech-run, deliberately — D30's
+    discard already covers blips and a min-run would spend latency budget.
+  - The 160 ms `speaking` debounce is a measurement: at 96 ms the indicator
+    blinked dark mid-phrase on the fixture.
+  - `assets/speech_fixture.wav` (13.9 s, generated with espeak-ng, committed with
+    provenance in `assets/README.md`) exists because **nothing numpy can
+    synthesise reliably crosses Silero's threshold** (D56) — so without speech in
+    the repo the whole stage can be dead and green.
+  - 54 new tests; **104 pass** on Linux with no GPU, no audio hardware, no
+    network.
 
 ## Next
 
-**Level 2 — Segmentation.** See [`PLAN.md`](PLAN.md) for the full ladder and
-each level's acceptance criteria.
+**Level 3 — Benchmark (gate), on Windows.** It is blocked on Level 1's
+10-minute recording, which is its input. See [`PLAN.md`](PLAN.md) for the full
+ladder and each level's acceptance criteria.
 
-**On the Windows machine, now two levels' worth and no longer just a
+**On the Windows machine, now three levels' worth and no longer just a
 formality:**
 
 ```
@@ -93,7 +125,13 @@ uv sync                                                  # Level 0, still owed
 python -m speech_translator.doctor                       # Level 0, still owed
 python -m speech_translator.tools.list_devices           # Level 1
 python -m speech_translator.tools.record_loopback -t 600 # Level 1 + BENCHMARK input
+python -m speech_translator.tools.dump_utterances \
+    --input-wav <that recording> --write-wav utts/       # Level 2, the open box
 ```
+
+Then **listen to `utts/`**. That is Level 2's one open acceptance criterion —
+boundaries landing at real pauses on real meeting audio — and it costs nothing
+extra once the recording exists.
 
 Expect CUDA, cuDNN and loopback to flip to PASS. Three things to write down
 because they are unknown from here: whether `uv sync` agrees with the lockfile,
@@ -106,8 +144,8 @@ recording is also Level 3's benchmark input, so it is wanted anyway.
 |---|---|---|
 | 0 | Foundation — skeleton, `uv.lock`, vendored ONNX, `doctor` | **done (Linux); Windows run owed** |
 | 1 | Audio capture — `AudioSource`, WASAPI + WAV, capture tools | **done (Linux); Windows run owed** |
-| 2 | Segmentation — Silero VAD, `Utterance` | **next** |
-| 3 | **Benchmark (gate)** — Windows only; picks model + `compute_type` | |
+| 2 | Segmentation — Silero VAD, `Utterance` | **done (Linux); real-speech inspection owed** |
+| 3 | **Benchmark (gate)** — Windows only; picks model + `compute_type` | **next; blocked on Level 1's recording** |
 | 4 | Transcription — worker process, hallucination guard, LID | |
 | 5 | Sentences + translation — carry-over, flush, budget | |
 | 6 | Server + UI — FastAPI, six states, caption cards | |
@@ -124,9 +162,9 @@ costs nothing and gives the benchmark a real capture path to source its sample
 audio from.
 
 ## In progress
-Nothing. Levels 0 and 1 are complete on Linux; their Windows verification is the
-first task of the next session on that machine, and it is now a single `git pull`
-away from being done in one sitting.
+Nothing. Levels 0, 1 and 2 are complete on Linux; their Windows verification is
+the first task of the next session on that machine, and all three fit in one
+sitting after a single `git pull`.
 
 ## Blocked
 - **Level 0's Windows half is unverified.** `uv sync` and `doctor` have not run
@@ -134,6 +172,13 @@ away from being done in one sitting.
   blocking in the sense that the lockfile's cross-platform claim is currently
   argued rather than demonstrated. Unchanged since session 5 — do not let it
   quietly drop off this list.
+- **Level 2's real-speech inspection is unverified**, and it is the same
+  blocker as the one below: `PLAN.md`'s "on a captured meeting WAV, boundaries
+  land at real pauses" needs a captured meeting WAV. The generated fixture (D56)
+  covers the wiring and the state machine, and `dump_utterances --write-wav`
+  makes the check a five-minute job once the recording exists — but TTS speech
+  has no room tone, no music bed and no overlap, which is exactly what Silero is
+  in the design to survive. Do not let the fixture be mistaken for the criterion.
 - **Level 1's Windows half is unverified.** No WASAPI endpoint has been opened.
   The format layer, both sources and both tools are tested here, and the
   chunk-seam failure is measured and mutation-tested (D46), but "captures 10
@@ -164,10 +209,15 @@ away from being done in one sitting.
   the core pipeline works.
 - Whether `int8_float16` beats `float16` on a GPU with no tensor cores. The
   benchmark will say; do not assume the RTX answer transfers (D18).
-- Whether Level 3 runs before Level 2. It may (D52) — the benchmark chunks at a
-  fixed 4 s and needs no Segmenter — at the cost of an optimistic RTF, mitigated
-  by bracketing at 1.5 s. Not yet chosen; the deciding factor is how scarce
-  Windows access is.
+- ~~Whether Level 3 runs before Level 2~~ — moot, Level 2 is built (D52 stands
+  as the record of the argument).
+- Whether the D54/D55 values survive real meeting audio. They are TUNABLE and
+  were chosen against generated speech; the falling-edge and dip numbers that
+  motivated hysteresis came from real recorded speech, but the 0.50/0.35 pair,
+  the 160 ms debounce and the 128/192 ms padding all want a pass at Level 7.
+- Whether Level 3's benchmark should chunk at the *real* utterance-length
+  distribution now that a Segmenter exists, rather than the fixed 4 s D52
+  assumed. The bracket at 1.5 s that D52 proposed is still the cheap answer.
 - Whether the demo machine's loopback endpoint negotiates `paInt16` or falls
   back to `paFloat32`, and what `defaultSampleRate` it reports. Both paths are
   built and both feed the same formatter (D49), so this is a fact to record on

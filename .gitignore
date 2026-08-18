@@ -5,6 +5,11 @@ venv/
 .env
 *.wav
 *.mp3
+
+# ...except the generated speech fixture, which is a committed asset, not a
+# recording. Without it every positive VAD test skips or fails on the machine
+# that matters (D56).
+!assets/speech_fixture.wav
 models/
 .DS_Store
 var/

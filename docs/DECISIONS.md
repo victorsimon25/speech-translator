@@ -876,3 +876,152 @@ a `uv sync`, a `doctor` run and a 10-minute capture, and the benchmark needs tha
 capture as its input, so all four fit in one session on that machine. The
 argument against is that the headline RTF is then approximate until Level 7
 confirms it.
+
+---
+
+## 2026-08-18 — Session 7 (Level 2, segmentation)
+
+### D53. Silero v5 needs 64 samples of context; the 512-wide call was silently dead
+`INTERFACES.md` §2, D35, `assets/README.md` and `doctor` all documented the
+model's input as `[N, 512]`. The vendored file is Silero **v5**, whose 16 kHz
+call takes **576** samples: the 512 new ones with **64 samples of the previous
+frame prepended**. The reference implementation keeps that context in the wrapper
+alongside the LSTM state; ours had no wrapper yet, so it kept neither.
+
+The ONNX input dimension is dynamic. A 512-wide call therefore *runs*, returns a
+float, and raises nothing. Measured on real recorded speech
+(`/usr/share/sounds/alsa/Front_Center.wav`, peak 15 211 — a 1.4 s spoken clip):
+
+| call shape | silence | 440 Hz tone | music chord | white noise | **real speech** |
+|---|---|---|---|---|---|
+| 512, as documented | 0.001 | 0.001 | 0.001 | 0.002 | **0.0005** |
+| 576 = 64 context + 512 new | 0.004 | 0.000 | 0.006 | 0.011 | **1.000** |
+
+**So two things carry across a frame boundary, not one:** the LSTM `state`
+`[2, 1, 128]`, and a 64-sample audio context. This is D46's failure one layer up
+— state that must survive a boundary, discarded at the boundary — and it gets
+D46's treatment: a guard for each, and a control for each proving the guard can
+see the bug.
+
+**What makes this worth a decision rather than a bugfix note** is how it would
+have failed. A VAD that answers "no speech, ever" produces no utterances, so no
+transcripts, so no captions, and every stage reports healthy. The symptom on the
+demo machine is a blank screen with a green health badge, and the natural
+suspects — capture, CUDA, the model download — are all downstream or upstream of
+the actual fault.
+
+**`doctor` is corrected too, and differently.** It used to construct the session,
+push one frame through and report the timing. That is a check that the file
+*loads*, dressed as a check that the VAD *works*, and it passed throughout. It
+now runs the speech fixture (D56) and asserts speech > 0.9 and silence < 0.1. A
+preflight that cannot fail on a dead component is not a preflight.
+
+D35 is not edited: its reasoning about torch and its 0.156 ms budget both stand,
+and the re-measurement at the correct 576 width is 0.116–0.141 ms, still inside
+it. The signature block in D35 is superseded by this entry.
+
+### D54. Speech threshold 0.50, release 0.35 — TUNABLE, and hysteresis rather than a single cut
+Silero emits a probability. Nothing in D23 or D25 says where to cut it, so this
+is a choice, and it is labelled in `config.py` the way D30's thresholds are:
+**TUNABLE, not derived.**
+
+**Two thresholds, not one.** Open at 0.50, stay open down to 0.35 — the same
+0.15 gap Silero's own reference iterator uses. Measured falling edges on real
+speech run `1.00 → 0.98 → 0.74 → 0.11`, and mid-word dips land in the 0.4s
+(0.46 and 0.41 both observed); a single cut re-closes the utterance there, which
+fragments an utterance mid-word and hands the translator half a clause (the D12
+tradeoff, incurred for no reason).
+
+**The flicker question, answered separately for the two things that flicker:**
+
+1. *The segmenter* is stabilised by the hysteresis above.
+2. *The `speaking` indicator* is stabilised by a **160 ms off-debounce**, which
+   applies to the side channel only and never to segmentation.
+
+**No minimum speech run to open, deliberately.** It is the obvious third
+mechanism and it is the wrong one here: requiring N consecutive speech frames
+delays the utterance's start, which spends latency budget (D25) to solve a
+problem D30 already solves for free at the other end — a blip that opens an
+utterance is discarded at close, having cost nothing but a few frames of
+buffering. Adding a min-run would mean two mechanisms suppressing the same
+false positive, one of them by making the product slower.
+
+**160 rather than 96 is a measurement, not a preference.** At 96 ms the
+indicator blinked dark for a single frame mid-phrase on the fixture: the natural
+dip around a plosive runs to three sub-threshold frames, which is exactly where a
+96 ms window expires. At 160 ms it holds through those and still goes dark at
+real pauses — a 96 ms dark gap remains at the comma in the first phrase, which is
+correct, because there *is* a pause there. The indicator resolves pauses down to
+about 250 ms and holds through anything shorter.
+
+### D55. Pre-roll 128 ms, tail pad 192 ms, and the min-utterance check measures speech
+Silero reports on the frame in which speech crosses the threshold, which is at
+best the frame containing the onset. Handing Whisper an utterance that begins
+exactly there clips the leading phoneme, and a clipped first word is a
+transcription error that no downstream stage can repair.
+
+- **Pre-roll: 4 frames (128 ms)** kept from before the trigger, out of a ring
+  buffer that is running anyway.
+- **Tail pad: 6 frames (192 ms)** kept after the last speech frame; the rest of
+  the 600 ms that closed the utterance is **dropped**. Trailing silence is
+  exactly what D30 says Whisper hallucinates "Thank you." onto, and `end_ms`
+  should mean the end of speech.
+
+Both are TUNABLE, both are whole frames, and the tail pad is deliberately less
+than `silence_threshold_ms` so it cannot eat the gap that closed the utterance.
+
+**The consequence that is easy to miss, and was nearly shipped:** pre-roll plus
+tail is **320 ms of padding**, which is more than `min_utterance_ms` (300). If
+the D30 discard tested `end_ms - start_ms`, every blip would clear the bar and
+the guard would be dead code — a 96 ms cough would emit a 416 ms "utterance". So
+the discard measures **speech**, between the first and last speech frames. This
+was caught by writing the blip test and getting an utterance back.
+
+Every emitted utterance therefore contains at least `min_utterance_ms` of speech,
+which is strictly stronger than the transcriber's own check in `INTERFACES.md`
+§3, and Level 4 should know that rather than rediscover it.
+
+**Two invariants fall out and are asserted for every utterance:**
+`len(pcm) == (end_ms - start_ms) * 32`, and
+`preceding_silence_ms == start_ms - previous_emitted.end_ms`.
+
+The max-length cap also floors to a whole frame, so "no utterance exceeds
+`max_utterance_ms`" holds for caps that are not multiples of 32 ms — at the
+2000 ms backpressure floor it emits 1984 ms, not 2016.
+
+### D56. Level 2 is tested with a scripted VAD and a generated speech fixture
+Two problems, and they need different answers.
+
+**The state machine** must not be tested through Silero. Boundary arithmetic
+deserves exact inputs, so `Segmenter` takes a `SpeechDetector` and the tests pass
+it a list of probabilities. Every closing rule, discard, gap and override
+assertion is deterministic.
+
+**The wrapper** must be tested through Silero, or D53 recurs. Its negative
+controls are easy — silence, a 440 Hz tone, a four-note chord and white noise all
+read below 0.05, and all produce zero utterances end to end, which is `PLAN.md`'s
+own criterion. Its positive control is the problem: **nothing synthesisable from
+numpy reliably crosses 0.5.** Formant-synthesised vowels with a syllable-rate
+envelope peak around 0.8 on 6% of frames, which is not something to assert on.
+Without a positive control, the entire stage can be dead and green.
+
+**Decision: generate speech and commit it.** `tools/make_speech_fixture.py`
+drives `libespeak-ng` through ctypes and writes `assets/speech_fixture.wav` —
+13.92 s, three phrases separated by known 900–1000 ms silences, at 16 kHz mono
+int16. Byte-reproducible across runs.
+
+- **Generated rather than downloaded** because espeak-ng's default voice is
+  formant synthesis: the output embeds no recorded audio and no third-party
+  sample, so there is no licence to reason about. mbrola voices are recorded
+  diphones and are deliberately not used.
+- **Committed rather than generated at test time** because the alternative is
+  `pytest.skip` on any machine without espeak-ng, which means skipping on
+  Windows — the machine that matters.
+- The third phrase is deliberately longer than `max_utterance_ms`, so the
+  max-length path is exercised by real audio and not only by a fake VAD.
+
+**Stated limit, because this is the tempting place to overclaim.** TTS speech has
+no room tone, no music bed, no overlapping speakers and no reverb — precisely
+what D23 chose Silero to survive. The fixture proves the VAD is alive and the
+state machine behaves. It is **not** the captured meeting WAV `PLAN.md` asks for,
+and Level 2's first acceptance criterion stays open until that recording exists.

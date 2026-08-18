@@ -16,8 +16,8 @@ dev laptop no matter how finished the code looks.
 |---|---|---|---|
 | 0 | Foundation | both | **done on Linux; Windows half unverified** |
 | 1 | Audio capture | Linux code / Windows verify | **done on Linux; Windows half unverified** |
-| 2 | Segmentation | Linux | next |
-| 3 | **Benchmark (gate)** | **Windows only** | not started |
+| 2 | Segmentation | Linux | **done on Linux; real-speech inspection owed to Windows** |
+| 3 | **Benchmark (gate)** | **Windows only** | next (blocked on Level 1's recording) |
 | 4 | Transcription | Linux code / Windows run | not started |
 | 5 | Sentences + translation | Linux | not started |
 | 6 | Server + UI | Linux (fake ASR) / Windows real | not started |
@@ -118,19 +118,44 @@ mutation-tested (D46); the first is what the Windows run is for.*
 
 **Deliverables**
 - Silero wrapper over the vendored ONNX via `onnxruntime`, state carried between
-  frames (D35).
+  frames (D35). **Two kinds of state, as it turned out** — the LSTM state and a
+  64-sample audio context (D53).
 - `Segmenter` — close on silence **or** max-length (D12) at the D25 values;
   accepts a **runtime override** of effective `max_utterance_ms` so Level 6's
   controller can shrink it (D28).
 - `min_utterance_ms` discard (D30); `preceding_silence_ms`; `speaking` side channel.
 - `tools/dump_utterances`.
+- *Added during the level:* `assets/speech_fixture.wav` and its generator, because
+  no positive VAD test is possible without speech in the repo (D56); the two
+  TUNABLE threshold decisions (D54) and the pre-roll/tail-pad decision (D55).
 
 **Acceptance**
 - [ ] On a captured meeting WAV, boundaries land at real pauses on inspection.
-- [ ] No utterance exceeds `max_utterance_ms`.
-- [ ] Silence-only and music-only input produce **zero** utterances.
-- [ ] Sub-300 ms blips are discarded, not emitted.
-- [ ] VAD cost stays near the measured 0.156 ms/frame.
+      **Owed to the Windows machine** — that WAV does not exist yet, because
+      `record_loopback` has not run on the demo machine (Level 1's open box).
+      *What has been checked here: on the generated speech fixture, whose
+      silences are 900–1000 ms by construction, boundaries land inside those
+      pauses and nowhere else, and each utterance is written out as its own WAV
+      by `dump_utterances --write-wav` and can be listened to. That is a stronger
+      check than "it ran" and a weaker one than the criterion: TTS speech has no
+      room tone, no music bed and no overlap, which is what Silero is here to
+      survive (D23, D56).*
+- [x] No utterance exceeds `max_utterance_ms`. *Asserted for every utterance in
+      every test, including 22 s of unbroken speech. The cap floors to a whole
+      frame, so it holds at the 2000 ms backpressure floor too — 1984 ms, not
+      2016 (D55).*
+- [x] Silence-only and music-only input produce **zero** utterances. *Silence, a
+      440 Hz tone, a four-note chord and white noise, each 6 s through the real
+      Silero: nothing above 0.05, zero utterances.*
+- [x] Sub-300 ms blips are discarded, not emitted. *And measured on speech, not
+      on the padded duration — the pre-roll and tail pad are 320 ms together, so
+      testing the padded duration would have cancelled the guard entirely (D55).*
+- [x] VAD cost stays near the measured 0.156 ms/frame. *0.116–0.141 ms per 32 ms
+      frame at the corrected 576-sample width, single threaded, CPU only.
+      `dump_utterances` reports it per run.*
+- [x] *(added)* The VAD actually detects speech, and a guard fails if it stops.
+      *This was not on the list, and it is the one that mattered: the documented
+      512-sample call returns 0.0005 on real speech and no error (D53).*
 
 **Unblocks** Level 3 (realistic chunk lengths) and Level 4.
 

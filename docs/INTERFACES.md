@@ -100,6 +100,34 @@ when the buffer reaches `max_utterance_ms` — whichever comes first.
 | `min_utterance_ms` | 300 | below this, discard — VAD blip, not speech (D30) |
 | `max_utterance_floor_ms` | 2000 | floor for adaptive shrink under load (D28) |
 
+**Tunables — TUNABLE, not derived (D54, D55).** Nothing in D23 or D25 fixes
+these; Silero emits a probability and the design never said where to cut it.
+They are starting points with reasons, to be calibrated at Level 7:
+
+| Key | Value | Why |
+|---|---|---|
+| `vad_speech_threshold` | 0.50 | opens an utterance |
+| `vad_release_threshold` | 0.35 | keeps it open — hysteresis, so a mid-word dip does not chatter |
+| `vad_speaking_off_debounce_ms` | 160 | the `speaking` indicator only |
+| `utterance_pre_roll_ms` | 128 | audio kept from *before* the trigger, so the first phoneme is not clipped |
+| `utterance_tail_pad_ms` | 192 | audio kept after the last speech frame; the rest of the closing silence is dropped |
+
+**Consequences of the padding, which callers can rely on:**
+
+- `len(pcm) == (end_ms - start_ms) * 32` for every utterance.
+- `preceding_silence_ms == start_ms - previous_emitted.end_ms`, always — the gap
+  accumulates across a discarded blip, so it stays reconstructible from the
+  emitted fields alone.
+- The `min_utterance_ms` discard measures **speech**, between the first and last
+  speech frames, not `end_ms - start_ms`. The padding is 320 ms on its own, which
+  is more than `min_utterance_ms`; testing the padded duration would let every
+  blip through. So every utterance published here contains at least
+  `min_utterance_ms` of speech — strictly stronger than the Transcriber's own
+  check in §3.
+- A `max_length` close **reopens immediately and contiguously**: the next
+  utterance begins on the very next frame, with `preceding_silence_ms = 0` and no
+  pre-roll. §4's fragment carry-over depends on that audio being unbroken.
+
 `max_utterance_ms` is the **dominant latency knob** — see D25 before changing it.
 The Segmenter must accept a *runtime* override of the effective value, because
 the backpressure controller shrinks it under load (D28).
@@ -107,8 +135,12 @@ the backpressure controller shrinks it under load (D28).
 `preceding_silence_ms` is carried so the silence-visualisation bonus is cheap if
 that turns out to be what the brief means. It costs nothing to populate.
 
-The Segmenter also emits a continuous boolean `speaking` signal for the live UI
-indicator (D11). That is a side channel, not part of `Utterance`.
+The Segmenter also emits a boolean `speaking` signal for the live UI indicator
+(D11). That is a side channel, not part of `Utterance`: `Segmenter.speaking` for
+polling, and an `on_speaking(bool)` callback that fires **on transitions only** —
+31 messages a second down a WebSocket is a flood, not a side channel. It follows
+the debounced VAD state, not the utterance, so the dot goes dark ~160 ms after
+speech stops rather than waiting the 600 ms the utterance needs.
 
 **VAD runtime.** Silero from a **vendored `silero_vad.onnx`** (2.3 MB, in the
 repo) via `onnxruntime`. The `silero-vad` PyPI package is *not* a dependency —
@@ -116,12 +148,21 @@ it imports torch unconditionally, which would put a second CUDA runtime on a
 4 GB card (D35).
 
 ```
-inputs : input [N, 512] float32 · state [2, N, 128] float32 · sr int64
-outputs: output [N, 1] float32  · stateN
+inputs : input [N, 576] float32 · state [2, N, 128] float32 · sr int64
+outputs: output [N, 1] float32  · stateN [2, N, 128] float32
 ```
 
-State is carried between frames; it is not stateless per frame. Measured cost:
-**0.156 ms per 32 ms frame** (D35).
+**576, not 512 — corrected in D53.** This is Silero v5: each call takes the 512
+new samples with **64 samples of the previous frame prepended**. So *two* things
+carry across the frame boundary, not one — the LSTM `state`, and a 64-sample
+audio context. The ONNX input dimension is dynamic, so a 512-wide call runs
+cleanly and returns a plausible float; it returns **0.0005 on real speech** where
+the correct call returns **1.0**, and nothing anywhere raises. This document said
+512 until D53 measured it, and so did `doctor`, which passed the dead VAD.
+
+Frames on the wire are still 512 samples (D23) — the context lives inside the
+VAD, not in the `AudioSource` contract. Measured cost at the correct width:
+**0.116–0.141 ms per 32 ms frame**, inside D35's 0.156 budget.
 
 ---
 

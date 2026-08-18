@@ -34,6 +34,13 @@ REPO_ROOT = PACKAGE_DIR.parent
 #: imported — it pulls torch unconditionally (D35).
 SILERO_ONNX_PATH = REPO_ROOT / "assets" / "silero_vad.onnx"
 
+#: Generated speech, 13.9 s, 16 kHz mono int16. The only audio in the repo that
+#: Silero rates as speech, so it is what makes a *positive* VAD test possible on
+#: a machine with no meeting recording (D56). Built by
+#: ``speech_translator/tools/make_speech_fixture.py``; provenance and its limits
+#: are in ``assets/README.md``.
+SPEECH_FIXTURE_PATH = REPO_ROOT / "assets" / "speech_fixture.wav"
+
 # --------------------------------------------------------------------------
 # Audio contract — fixed everywhere, never varied (D23, D24)
 # --------------------------------------------------------------------------
@@ -44,6 +51,19 @@ SAMPLE_WIDTH_BYTES = 2  # signed 16-bit little-endian
 FRAME_SAMPLES = 512  # Silero's required size at 16 kHz
 FRAME_BYTES = FRAME_SAMPLES * CHANNELS * SAMPLE_WIDTH_BYTES  # 1024
 FRAME_MS = FRAME_SAMPLES * 1000 // SAMPLE_RATE  # 32
+
+# --------------------------------------------------------------------------
+# Silero's call shape — NOT a change to the frame contract above (D53)
+# --------------------------------------------------------------------------
+
+#: Silero v5 wants 64 samples of the *previous* frame prepended to the 512 new
+#: ones, so each call is 576 wide. The ONNX input dimension is dynamic, so a
+#: 512-wide call runs and returns a plausible-looking number — it is just wrong:
+#: real speech reads 0.0005 instead of 1.0. Sources still yield 512-sample
+#: frames; the context is carried inside the VAD, alongside the LSTM state.
+VAD_CONTEXT_SAMPLES = 64
+VAD_INPUT_SAMPLES = VAD_CONTEXT_SAMPLES + FRAME_SAMPLES  # 576
+VAD_STATE_SHAPE = (2, 1, 128)
 
 # --------------------------------------------------------------------------
 # Environment helpers
@@ -89,6 +109,32 @@ class Config:
     max_utterance_ms: int = 4_000
     min_utterance_ms: int = 300
     max_utterance_floor_ms: int = 2_000
+
+    # -- VAD and utterance shaping (D54, D55) ------------------------------
+    # TUNABLE, not derived. Unlike the four values above, nothing in D23 or D25
+    # fixes these: Silero emits a probability and the design never said where to
+    # cut it. They are starting points, chosen with reasons (D54, D55), to be
+    # calibrated against real meeting audio at Level 7.
+    #: Open an utterance at this probability...
+    vad_speech_threshold: float = 0.50
+    #: ...and keep it open down to this one. Two thresholds, not one: real
+    #: falling edges pass through 0.74 on their way from 1.00 to 0.11, and a
+    #: single cut chatters on exactly that frame. Silero's own reference
+    #: iterator uses the same 0.15 gap.
+    vad_release_threshold: float = 0.35
+    #: The `speaking` side channel only — how long speech must be absent before
+    #: the UI indicator goes dark. Stops it strobing in inter-word gaps without
+    #: making it wait the full `silence_threshold_ms` for the utterance to close.
+    #: 160, not 96: measured on the speech fixture, the natural dip around a
+    #: plosive runs to three sub-threshold frames, which is exactly where a 96 ms
+    #: window expires — the indicator blinked dark for one frame mid-phrase.
+    vad_speaking_off_debounce_ms: int = 160
+    #: Audio kept from *before* the triggering frame, so Whisper is not handed a
+    #: clipped first phoneme.
+    utterance_pre_roll_ms: int = 128
+    #: Audio kept after the last speech frame. The rest of the closing silence is
+    #: dropped — trailing silence is what D30 says Whisper hallucinates onto.
+    utterance_tail_pad_ms: int = 192
 
     # -- ASR ---------------------------------------------------------------
     #: Decided by docs/BENCHMARK.md at Level 3 (D20). None until then, and the
@@ -179,6 +225,11 @@ def load_config() -> Config:
         max_utterance_ms=_env_int("MAX_UTTERANCE_MS", 4_000),
         min_utterance_ms=_env_int("MIN_UTTERANCE_MS", 300),
         max_utterance_floor_ms=_env_int("MAX_UTTERANCE_FLOOR_MS", 2_000),
+        vad_speech_threshold=_env_float("VAD_SPEECH_THRESHOLD", 0.50),
+        vad_release_threshold=_env_float("VAD_RELEASE_THRESHOLD", 0.35),
+        vad_speaking_off_debounce_ms=_env_int("VAD_SPEAKING_OFF_DEBOUNCE_MS", 160),
+        utterance_pre_roll_ms=_env_int("UTTERANCE_PRE_ROLL_MS", 128),
+        utterance_tail_pad_ms=_env_int("UTTERANCE_TAIL_PAD_MS", 192),
         model_size=_env_opt_str("MODEL_SIZE", None),
         compute_type=_env_opt_str("COMPUTE_TYPE", None),
         device=_env_str("DEVICE", "cuda"),

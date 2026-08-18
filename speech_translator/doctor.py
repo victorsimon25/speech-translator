@@ -122,37 +122,78 @@ def check_no_torch() -> Result:
 
 
 def check_silero_asset(_c: cfg.Config) -> Result:
-    """Vendored ONNX present, loadable, and one real 32 ms frame through it."""
+    """Vendored ONNX present, loadable, correctly *answering*, and fast enough.
+
+    This check used to run one frame through the session and report the timing.
+    That is not enough, and D53 is why: the model's input dimension is dynamic,
+    so calling it 512 samples wide instead of the correct 576 runs perfectly and
+    returns 0.0005 on speech. The old check passed a VAD that could not detect
+    speech at all. It now asserts a real answer in both directions — speech reads
+    high, silence reads low — so a dead VAD fails the preflight.
+    """
     path = cfg.SILERO_ONNX_PATH
     if not path.exists():
         return Result("Silero VAD (vendored ONNX)", FAIL, f"missing {path}")
+    if not cfg.SPEECH_FIXTURE_PATH.exists():
+        return Result(
+            "Silero VAD (vendored ONNX)",
+            FAIL,
+            f"missing {cfg.SPEECH_FIXTURE_PATH} — it is committed (see "
+            f"assets/README.md); without it there is nothing to prove the VAD "
+            f"answers rather than merely runs",
+        )
     try:
         import time
+        import wave
 
         import numpy as np
-        import onnxruntime as ort
 
-        sess = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
-        x = np.zeros((1, cfg.FRAME_SAMPLES), dtype=np.float32)
-        state = np.zeros((2, 1, 128), dtype=np.float32)
-        sr = np.array(cfg.SAMPLE_RATE, dtype=np.int64)
-        sess.run(None, {"input": x, "state": state, "sr": sr})  # warm up
+        from .segment import SileroVad
+
+        vad = SileroVad(path)
+        with wave.open(str(cfg.SPEECH_FIXTURE_PATH), "rb") as fixture:
+            pcm = fixture.readframes(fixture.getnframes())
+
+        probabilities = [
+            vad.probability(pcm[i : i + cfg.FRAME_BYTES])
+            for i in range(0, len(pcm) - cfg.FRAME_BYTES + 1, cfg.FRAME_BYTES)
+        ]
+        speech_max = max(probabilities)
+        # The fixture opens with 500 ms of digital silence.
+        silence_max = max(probabilities[:15])
+
+        silent_frame = b"\x00" * cfg.FRAME_BYTES
+        vad.reset()
+        for _ in range(10):  # warm up
+            vad.probability(silent_frame)
         t0 = time.perf_counter()
-        n = 50
+        n = 200
         for _ in range(n):
-            out, state = sess.run(None, {"input": x, "state": state, "sr": sr})
+            vad.probability(silent_frame)
         per_frame_ms = (time.perf_counter() - t0) * 1000 / n
     except Exception as exc:  # noqa: BLE001 — doctor reports, never raises
         return Result("Silero VAD (vendored ONNX)", FAIL, f"{type(exc).__name__}: {exc}")
 
     size_mb = path.stat().st_size / 1e6
-    return Result(
-        "Silero VAD (vendored ONNX)",
-        PASS,
-        f"{size_mb:.1f} MB · {per_frame_ms:.3f} ms per {cfg.FRAME_MS} ms frame "
-        f"(D35 measured 0.156)",
-        extra={"per_frame_ms": round(per_frame_ms, 4)},
+    detail = (
+        f"{size_mb:.1f} MB · speech {speech_max:.2f} / silence {silence_max:.2f} · "
+        f"{per_frame_ms:.3f} ms per {cfg.FRAME_MS} ms frame (D35 measured 0.156)"
     )
+    extra = {
+        "per_frame_ms": round(per_frame_ms, 4),
+        "fixture_speech_max": round(speech_max, 4),
+        "fixture_silence_max": round(silence_max, 4),
+    }
+    if speech_max < 0.9 or silence_max > 0.1:
+        return Result(
+            "Silero VAD (vendored ONNX)",
+            FAIL,
+            f"{detail} — the model loads but does not discriminate. Expect "
+            f"speech > 0.9 and silence < 0.1; check the {cfg.VAD_INPUT_SAMPLES}-"
+            f"sample call shape and the carried context (D53).",
+            extra=extra,
+        )
+    return Result("Silero VAD (vendored ONNX)", PASS, detail, extra=extra)
 
 
 def check_cuda() -> Result:

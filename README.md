@@ -131,6 +131,12 @@ python -m speech_translator.tools.list_devices
 python -m speech_translator.tools.record_loopback -t 600 -o meeting.wav
 python -m speech_translator.tools.record_loopback --input-wav any.wav -o out.wav
 
+# Segmentation (Level 2). Where the boundaries landed, and why.
+python -m speech_translator.tools.dump_utterances --input-wav meeting.wav
+python -m speech_translator.tools.dump_utterances --input-wav meeting.wav \
+    --write-wav utts/          # one WAV per utterance — play them
+python -m speech_translator.tools.dump_utterances --max-utterance-ms 2000 --json
+
 # --- not yet built ---------------------------------------------------------
 python -m speech_translator                             # Level 6 → localhost:8000
 ```
@@ -138,6 +144,10 @@ python -m speech_translator                             # Level 6 → localhost:
 `record_loopback` writes 16 kHz mono int16 — the pipeline's own frame format, and
 the input `docs/BENCHMARK.md` consumes (D47). `--input-wav` swaps a WAV in for
 the device so the tool runs on the Linux dev box (D48).
+
+`dump_utterances` is Level 2's inspection instrument. The table tells you the
+state machine is self-consistent; `--write-wav` is what tells you the cuts landed
+where a person would have put them, because you can listen to them.
 
 Run `doctor` first after every `git pull` on the Windows machine. It exists so a
 failure names itself instead of surfacing three layers away (D40). On Linux it

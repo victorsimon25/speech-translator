@@ -76,7 +76,14 @@ def test_audio_contract_constants():
 
 
 def test_vendored_onnx_present_and_runs_one_frame():
-    """D35: the file is in the repo and matches the documented signature."""
+    """D35/D53: the file is in the repo and matches the *corrected* signature.
+
+    This test used to pass `FRAME_SAMPLES` (512) and assert only the output
+    shapes. It passed, and the VAD it was checking could not detect speech: the
+    input dimension is dynamic, so the wrong width runs and returns 0.0005 on
+    speech. Shapes are not an answer. `tests/test_segment.py` asserts the answer;
+    this one now at least calls the model the way the model is documented.
+    """
     import numpy as np
     import onnxruntime as ort
 
@@ -86,16 +93,17 @@ def test_vendored_onnx_present_and_runs_one_frame():
     names = {i.name for i in sess.get_inputs()}
     assert names == {"input", "state", "sr"}
 
+    assert cfg.VAD_INPUT_SAMPLES == cfg.VAD_CONTEXT_SAMPLES + cfg.FRAME_SAMPLES == 576
     out, state = sess.run(
         None,
         {
-            "input": np.zeros((1, cfg.FRAME_SAMPLES), dtype=np.float32),
-            "state": np.zeros((2, 1, 128), dtype=np.float32),
+            "input": np.zeros((1, cfg.VAD_INPUT_SAMPLES), dtype=np.float32),
+            "state": np.zeros(cfg.VAD_STATE_SHAPE, dtype=np.float32),
             "sr": np.array(cfg.SAMPLE_RATE, dtype=np.int64),
         },
     )
     assert out.shape == (1, 1)
-    assert state.shape == (2, 1, 128)
+    assert state.shape == cfg.VAD_STATE_SHAPE
 
 
 def test_utf8_is_forced_and_non_ascii_survives_a_subprocess():
