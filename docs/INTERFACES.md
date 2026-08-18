@@ -54,7 +54,22 @@ class AudioSource(Protocol):
 | `MicrophoneSource` | future | Only if two-way is required (D4) |
 
 Source selection happens once at startup and is the *only* place platform
-detection is allowed to appear.
+detection is allowed to appear — `speech_translator.audio.open_source()` is that
+place.
+
+**Where normalisation lives.** Both implementations own a `FrameFormatter`
+(`speech_translator/audio/format.py`), which is the decode → downmix → streaming
+resample → framing chain and nothing else. It is internal to this stage: no
+downstream module imports it. Two properties worth knowing from outside:
+
+- **One `soxr.ResampleStream` per source, never rebuilt** — the filter state has
+  to carry across chunks or every chunk boundary becomes a click (D46).
+- **16 kHz mono int16 in is bit-exact out** — no resampler is constructed at
+  all, so replaying a `record_loopback` capture is byte-identical to the live
+  capture rather than resampled twice.
+
+The final frame of a stream is zero-padded to 512 samples rather than dropped,
+so total sample count matches source duration to within one frame.
 
 ---
 

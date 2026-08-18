@@ -15,8 +15,8 @@ dev laptop no matter how finished the code looks.
 | Level | Name | Build on | Status |
 |---|---|---|---|
 | 0 | Foundation | both | **done on Linux; Windows half unverified** |
-| 1 | Audio capture | Linux code / Windows verify | next |
-| 2 | Segmentation | Linux | not started |
+| 1 | Audio capture | Linux code / Windows verify | **done on Linux; Windows half unverified** |
+| 2 | Segmentation | Linux | next |
 | 3 | **Benchmark (gate)** | **Windows only** | not started |
 | 4 | Transcription | Linux code / Windows run | not started |
 | 5 | Sentences + translation | Linux | not started |
@@ -78,19 +78,37 @@ of the same for offline work.
 - `tools/list_devices`, `tools/record_loopback`.
 
 **Acceptance**
-- [ ] Every emitted frame is exactly 1024 bytes; total sample count matches
-      source duration to within one frame.
-- [ ] A 48 kHz stereo WAV and a 16 kHz mono WAV both produce identical-shaped
+- [x] Every emitted frame is exactly 1024 bytes; total sample count matches
+      source duration to within one frame. *Verified at 16 k/44.1 k/48 k/96 k,
+      mono and stereo, with ragged 1–5000-sample chunks. The tolerance is one
+      frame because `flush()` zero-pads the tail — Silero takes 512 samples or
+      nothing (D23), so a partial tail is completed, not dropped.*
+- [x] A 48 kHz stereo WAV and a 16 kHz mono WAV both produce identical-shaped
       output; the 16 kHz mono path is bit-exact (no needless float round-trip).
+      *Bit-exact by construction, not by tolerance: at 16 kHz mono int16 no
+      resampler is constructed, no downmix runs and no float conversion happens
+      (D46). The test asserts byte equality with the source.*
 - [ ] `record_loopback` on Windows captures 10 minutes of meeting audio that
       plays back cleanly — correct pitch, no clicks at chunk boundaries.
-- [ ] Unit tests pass on Linux with no audio hardware.
+      **Owed to the Windows machine.** *The half that can be checked here has
+      been: a 10 s 48 kHz stereo signal through the real tool lands its spectral
+      peaks at exactly 1000 and 2500 Hz (pitch correct, no rate-ratio error) with
+      out-of-band energy 81.4 dB down. The same signal through a per-chunk
+      resampler — the failure this criterion is really about — sits at 30.2 dB.
+      What is genuinely untested is the device: opening the endpoint, the
+      negotiated sample format, and ten sustained minutes of it.*
+- [x] Unit tests pass on Linux with no audio hardware. *34 new tests, 50 total,
+      no GPU, no network, no device.*
+
+**Also carried to Windows:** `list_devices` against real hardware, and which of
+`paInt16` / `paFloat32` the demo machine's endpoint actually negotiates (D49).
 
 **Unblocks** Level 2, and **the benchmark's sample audio** — `BENCHMARK.md`
 sources its input through `record_loopback`, so this is on the critical path.
 
 **Risk:** medium. Device format variance; clicks if the resampler is
-re-instantiated per chunk.
+re-instantiated per chunk. *The second risk is closed on the code side and
+mutation-tested (D46); the first is what the Windows run is for.*
 
 ---
 

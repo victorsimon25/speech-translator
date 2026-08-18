@@ -705,3 +705,110 @@ Verified: all 45 locked packages carry a `win_amd64` wheel, a pure-Python wheel,
 or an sdist — including `ctranslate2`, `onnxruntime`, `av`, `tokenizers`,
 `soxr`, `pyaudiowpatch` and both `nvidia-*` packages. This is evidence, not
 proof; the proof is `uv sync` on Windows, which is owed.
+
+---
+
+## 2026-08-18 — Session 6 (Level 1, audio capture)
+
+### D46. One `soxr.ResampleStream` per source, and the 16 kHz path bypasses it
+D24 said the source normalises. It did not say *how*, and the obvious-looking
+implementation is wrong: `soxr.resample(chunk, 48000, 16000)` per chunk. A
+polyphase resampler is stateful — it has a delay line — and rebuilding it per
+chunk discards that line and welds together fragments that do not line up. The
+result is a click at every chunk boundary, which is `PLAN.md`'s stated risk for
+this level.
+
+**Decision:** `FrameFormatter` constructs exactly one `soxr.ResampleStream` in
+`__init__` and never rebuilds it. `flush()` drains its delay line with
+`last=True`.
+
+**Measured on the dev box** — the same 10 s two-tone signal, pushed in random
+1–5000-sample chunks:
+
+| | out-of-band energy | max sample step | output samples (expect 160 000) |
+|---|---|---|---|
+| One stream (what we ship) | **−81.4 dB** | 8 584 | 160 000 |
+| A fresh stream per chunk | **−30.2 dB** | 11 218 | 159 994 |
+
+51 dB of broadband noise is what "clicks at chunk boundaries" is, numerically.
+
+**Second half of the decision:** when the source is already 16 kHz mono int16 —
+which every recording *we* produce is — no resampler is constructed at all, no
+downmix runs, and no float round-trip happens. `passthrough` is True and the
+bytes reach the framer untouched. Bit-exactness is then a structural property,
+not a rounding claim, which is why the test can assert byte equality rather than
+a tolerance.
+
+**The guard is mutation-tested, not just asserted.** `tests/test_audio.py` has
+`test_control_a_per_chunk_resampler_does_produce_seams`, which deliberately
+reproduces the bug and asserts the seam bound *rejects* it — otherwise a bound
+loose enough to accept anything would pass silently. Injecting the per-chunk
+rebuild into `FrameFormatter` fails two tests (the output guard and the
+constructed-once guard) and no others; reverting it restores 50/50.
+
+### D47. `record_loopback` writes the normalised stream, not the device stream
+The tool could write what the device gave it (48 kHz stereo, possibly float32)
+or what the pipeline consumes (16 kHz mono int16). It writes the second: the
+exact bytes `AudioSource.frames()` yields.
+
+**Why, in order of weight:**
+1. `BENCHMARK.md` step 2 feeds these recordings to faster-whisper at Level 3.
+   Whisper wants 16 kHz mono; writing the device format would mean Level 3
+   re-implements the conversion, which is the sample-rate branch D24 exists to
+   prevent.
+2. Replaying our own capture then goes through the passthrough path, so an
+   offline run is bit-identical to the live one rather than resampled twice.
+3. **The file becomes the evidence for the format layer.** If it plays back at
+   the right pitch with no clicks, decode → downmix → streaming resample →
+   framing is correct end to end. A device-native recording would be a recording
+   *of the device* and would prove nothing about our code.
+
+**Rejected:** an `--also-raw` flag writing a second device-native WAV as a
+diagnostic. **Cost, stated plainly:** if the Windows recording sounds wrong there
+is no raw capture to separate a device problem from a resampler problem. Accepted
+because the resampler side is already covered by D46's measurement, so suspicion
+falls on capture first and the diagnosis is not actually ambiguous.
+
+### D48. `--input-wav` makes the tool itself testable on the dev box
+`record_loopback` is more than its capture call: incremental WAV writing, the
+level meter, the Ctrl-C path that must still leave a valid file, the duration
+report. On Linux none of that would ever run, and it would arrive on the demo
+machine untested at the same moment as the device code (D22).
+
+`--input-wav PATH` substitutes `WavFileSource` for the live source through the
+same `open_source()` seam. Everything except opening the device now runs, and is
+tested, here. What remains Windows-only is genuinely Windows-only.
+
+### D49. WASAPI: ask for int16, accept float32, read the rate off the device
+Two things the demo machine decides for us, and both are on the D41 register.
+
+- **Sample rate.** `defaultSampleRate` is read from the device info and handed to
+  the formatter. 48 000 is typical, 44 100 and 96 000 are not exotic, and the
+  user can change it in Windows sound settings between two runs. The literal
+  48000 appears nowhere in the audio package.
+- **Sample format.** We request `paInt16` first because it is what the pipeline
+  wants and it skips a conversion. WASAPI shared mode may insist on the device
+  mix format, commonly float32, so `_open()` falls back to `paFloat32` and
+  records which one it got. Both feed the same `FrameFormatter`, so D24 holds
+  either way; the float path clips to ±1.0 *before* scaling, because a mixed
+  desktop can exceed unity and a wrapped sample is a loud click where a clipped
+  one is not.
+
+Which format the GTX machine actually negotiates is unknown until it runs there,
+and is written down as an open item rather than assumed.
+
+### D50. Blocking `stream.read`, not a callback and a queue
+PortAudio offers both. The callback would never block the audio thread and would
+make overruns countable; the blocking read is one loop with no second
+concurrency surface.
+
+**Blocking read wins for now** because PortAudio already buffers internally, the
+only downstream consumer is Silero at 0.15 ms per 32 ms frame (D35) — a 200×
+margin — and D28 already owns backpressure further down the pipeline. Adding a
+second, differently-shaped drop policy at the capture end would mean two things
+that can drop audio for unrelated reasons.
+
+**The condition for revisiting is explicit:** if the ten-minute Windows recording
+shows overruns or gaps, swap in a callback plus a bounded queue. The change is
+local to `wasapi.py` because the formatter and the `AudioSource` contract do not
+move.

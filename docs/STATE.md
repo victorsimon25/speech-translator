@@ -1,6 +1,6 @@
 # State
 
-_Last updated: 2026-08-18 (session 5 — Level 0 built)_
+_Last updated: 2026-08-18 (session 6 — Level 1 built)_
 
 ## Done
 - Requirements and architecture agreed (see `DECISIONS.md`).
@@ -56,22 +56,57 @@ _Last updated: 2026-08-18 (session 5 — Level 0 built)_
     DLLs, WASAPI loopback), 1 warn (no model chosen yet), 1 real fail (no API
     key yet). Expected failures are labelled and excluded from the exit code.
   - 16 tests pass on Linux with no GPU, no audio hardware, no network.
+- **Level 1 (Audio capture) built and passing on Linux.** The first pipeline
+  stage.
+  - `speech_translator/audio/`: `AudioSource` Protocol exactly as
+    `INTERFACES.md` §1 states it, `FrameFormatter` (decode → downmix →
+    streaming resample → 512-sample frames, all inside the source per D24),
+    `WavFileSource`, `WasapiLoopbackSource`, and `open_source()` — the one
+    place platform detection is allowed to appear.
+  - `speech_translator/tools/`: `list_devices`, `record_loopback`.
+  - **The chunk-seam risk is closed and mutation-tested (D46).** One
+    `soxr.ResampleStream` per source, never rebuilt. Same 10 s signal, ragged
+    chunks: out-of-band energy **−81.4 dB** streaming vs **−30.2 dB** with a
+    per-chunk resampler. Injecting the bug into `FrameFormatter` fails exactly
+    two tests and no others.
+  - **16 kHz mono int16 is bit-exact by construction** — no resampler is built,
+    no downmix runs, no float round-trip. So replaying our own recordings is
+    identical to the capture, not resampled twice.
+  - `record_loopback` writes the *normalised* stream, because `BENCHMARK.md`
+    consumes it at Level 3 and because that makes the recording itself the
+    evidence for the format layer (D47). `--input-wav` runs the whole tool on
+    Linux, leaving device open as the only genuinely Windows-only part (D48).
+  - 34 new tests; **50 pass** on Linux with no GPU, no audio hardware, no
+    network.
 
 ## Next
 
-**Level 1 — Audio capture.** See [`PLAN.md`](PLAN.md) for the full ladder and
+**Level 2 — Segmentation.** See [`PLAN.md`](PLAN.md) for the full ladder and
 each level's acceptance criteria.
 
-**First, on the Windows machine:** `git pull && uv sync && python -m
-speech_translator.doctor`. That is the other half of Level 0's acceptance and it
-cannot be done from here (D22). Expect CUDA, cuDNN and loopback to flip to PASS;
-if `uv sync` disagrees with the lockfile, that is a finding, not a formality.
+**On the Windows machine, now two levels' worth and no longer just a
+formality:**
+
+```
+git pull
+uv sync                                                  # Level 0, still owed
+python -m speech_translator.doctor                       # Level 0, still owed
+python -m speech_translator.tools.list_devices           # Level 1
+python -m speech_translator.tools.record_loopback -t 600 # Level 1 + BENCHMARK input
+```
+
+Expect CUDA, cuDNN and loopback to flip to PASS. Three things to write down
+because they are unknown from here: whether `uv sync` agrees with the lockfile,
+what `defaultSampleRate` the endpoint reports, and whether it negotiates
+`paInt16` or falls back to `paFloat32` (D49). Then **listen to the recording** —
+correct pitch and no clicks is Level 1's last open acceptance box, and that
+recording is also Level 3's benchmark input, so it is wanted anyway.
 
 | Level | | Status |
 |---|---|---|
 | 0 | Foundation — skeleton, `uv.lock`, vendored ONNX, `doctor` | **done (Linux); Windows run owed** |
-| 1 | Audio capture — `AudioSource`, WASAPI + WAV, capture tools | **next** |
-| 2 | Segmentation — Silero VAD, `Utterance` | |
+| 1 | Audio capture — `AudioSource`, WASAPI + WAV, capture tools | **done (Linux); Windows run owed** |
+| 2 | Segmentation — Silero VAD, `Utterance` | **next** |
 | 3 | **Benchmark (gate)** — Windows only; picks model + `compute_type` | |
 | 4 | Transcription — worker process, hallucination guard, LID | |
 | 5 | Sentences + translation — carry-over, flush, budget | |
@@ -89,14 +124,22 @@ costs nothing and gives the benchmark a real capture path to source its sample
 audio from.
 
 ## In progress
-Nothing. Level 0 is complete on Linux; its Windows verification is the first
-task of the next session on that machine.
+Nothing. Levels 0 and 1 are complete on Linux; their Windows verification is the
+first task of the next session on that machine, and it is now a single `git pull`
+away from being done in one sitting.
 
 ## Blocked
 - **Level 0's Windows half is unverified.** `uv sync` and `doctor` have not run
-  on the demo machine. Not blocking Levels 1–2, which are Linux work, but it is
+  on the demo machine. Not blocking Level 2, which is Linux work, but it is
   blocking in the sense that the lockfile's cross-platform claim is currently
-  argued rather than demonstrated.
+  argued rather than demonstrated. Unchanged since session 5 — do not let it
+  quietly drop off this list.
+- **Level 1's Windows half is unverified.** No WASAPI endpoint has been opened.
+  The format layer, both sources and both tools are tested here, and the
+  chunk-seam failure is measured and mutation-tested (D46), but "captures 10
+  minutes that plays back cleanly" is a claim about hardware and stays open.
+  It is also the input `BENCHMARK.md` needs, so **Level 3 cannot start until
+  this recording exists.**
 - **Three truncated lines in the assignment brief** are still unknown — see
   `PRD.md`. The scope line gates whether incoming-only is permitted. Raised
   again in session 4 and still unanswered; it is the only open item that can
@@ -121,6 +164,10 @@ task of the next session on that machine.
   the core pipeline works.
 - Whether `int8_float16` beats `float16` on a GPU with no tensor cores. The
   benchmark will say; do not assume the RTX answer transfers (D18).
+- Whether the demo machine's loopback endpoint negotiates `paInt16` or falls
+  back to `paFloat32`, and what `defaultSampleRate` it reports. Both paths are
+  built and both feed the same formatter (D49), so this is a fact to record on
+  the first Windows run, not a risk.
 - Sentence-boundary splitting for languages without Latin punctuation
   conventions (e.g. Thai, which does not space or full-stop the same way). Not a
   problem for the likely demo languages; note it before claiming generality.

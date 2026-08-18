@@ -126,11 +126,18 @@ python -m speech_translator.doctor        # preflight: UTF-8, lockfile, no-torch
 python -m speech_translator.doctor --no-net   # skip the live translation call
 python -m speech_translator.doctor --json     # machine-readable
 
+# Capture (Level 1). list_devices is Windows-only and says so on Linux.
+python -m speech_translator.tools.list_devices
+python -m speech_translator.tools.record_loopback -t 600 -o meeting.wav
+python -m speech_translator.tools.record_loopback --input-wav any.wav -o out.wav
+
 # --- not yet built ---------------------------------------------------------
-python -m speech_translator.tools.list_devices          # Level 1
-python -m speech_translator.tools.record_loopback ...   # Level 1
 python -m speech_translator                             # Level 6 → localhost:8000
 ```
+
+`record_loopback` writes 16 kHz mono int16 — the pipeline's own frame format, and
+the input `docs/BENCHMARK.md` consumes (D47). `--input-wav` swaps a WAV in for
+the device so the tool runs on the Linux dev box (D48).
 
 Run `doctor` first after every `git pull` on the Windows machine. It exists so a
 failure names itself instead of surfacing three layers away (D40). On Linux it
