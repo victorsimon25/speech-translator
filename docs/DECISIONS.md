@@ -495,3 +495,122 @@ the RTF curve, the throttling curve and the queue-depth graph — i.e. the entir
 evidence base for the DoD's real-time claim and for the D25/D26 gates. It costs
 roughly twenty lines. Building it after the fact means re-running every
 measurement to get the numbers the journey doc needs.
+
+---
+
+## 2026-08-18 — Session 4 (stack confirmation and portability)
+
+### D35. Silero runs from a vendored ONNX file; PyTorch is not a dependency
+The `silero-vad` PyPI package declares `torch` and `torchaudio` as hard
+requirements and does `import torch` at module scope in `model.py` — including
+on the `onnx=True` path. Verified by inspection, and `import silero_vad` fails
+in the dev venv today for exactly this reason.
+
+**Why this is a portability decision and not a packaging preference:** on Windows
+`pip install silero-vad` pulls torch (~2.5 GB, possibly a CUDA build). A torch
+CUDA runtime in the same process as CTranslate2's CUDA runtime means two CUDA
+contexts and two sets of cuDNN expectations on a card with **4 GB total**
+(D18). It would work on the Linux dev box, where nothing loads CUDA, and fail on
+the Windows machine as an OOM or a DLL error — the exact failure mode that is
+expensive to diagnose remotely.
+
+**Decision:** vendor `silero_vad.onnx` (2.3 MB, MIT) into the repo and run it
+through `onnxruntime` directly. Never import the `silero_vad` package at
+runtime. This also removes a first-run download.
+
+Model interface, confirmed against the file:
+
+```
+inputs : input [N, 512] float32 · state [2, N, 128] float32 · sr int64
+outputs: output [N, 1] float32  · stateN
+```
+
+**Measured, not estimated: 0.156 ms per 32 ms frame** on the dev laptop CPU —
+about 0.5% of one core. D23 estimated "roughly 1 ms"; the real figure is ~6×
+cheaper. D23 is left as written; this is the measurement that supersedes its
+estimate.
+
+### D36. The demo machine is the only machine that has to run this
+Confirmed with the user. The brief asks for a UI "that you can demonstrate", not
+one the interviewers install. No CPU fallback path will be built.
+
+**What this buys:** the model shortlist stays CUDA-only, `BENCHMARK.md` keeps one
+set of columns, and packaging stays a `uv sync`.
+
+**What it costs, stated so it is a choice and not an oversight:** if an
+interviewer asks to run it on their own laptop, the answer is no. The mitigation
+is a recorded demo video plus the JSONL timing log (D34) as evidence, which is
+stronger than a live install on unknown hardware anyway. Revisit only if the
+truncated brief line turns out to demand distribution.
+
+### D37. Google Cloud Translation over REST with an API key, not the client library
+`google-cloud-translate` pulls gRPC and protobuf and expects a service-account
+JSON file discovered through `GOOGLE_APPLICATION_CREDENTIALS` — an absolute path
+that differs on every machine, which is a portability failure waiting to happen
+across the Linux/Windows split (D22).
+
+**Decision:** one `httpx` POST to `translation.googleapis.com/language/translate/v2`
+with the key in an environment variable. Moves between machines by copying one
+line into `.env`. The key is restricted to the Translation API in the console.
+
+**Why this is not a shortcut:** the free-tier quota (D7) is per project, not per
+auth method, so nothing about the budget changes. The Translator stays behind the
+interface `INTERFACES.md` already requires, so swapping to the client library
+later is a single class.
+
+**Security note:** an API key is a bearer credential. It goes in `.env`, `.env` is
+git-ignored, and `.env.example` carries the variable name only.
+
+### D38. FastAPI + uvicorn; the UI is vanilla HTML/CSS/JS with no build step
+One process serves the static UI and the WebSocket, and it is async-native, which
+is where D27 already puts the segmenter, translator and publisher.
+
+**No npm, no bundler, no framework.** A node toolchain would add a second
+runtime, a second lockfile and a build step between a code change and a demo, in
+exchange for nothing a caption list needs. The UI is one HTML file, one CSS file
+and one JS file, opened directly from the server.
+
+### D39. Dependencies pinned with `uv` and a committed cross-platform lockfile
+`uv.lock` resolves for Windows and Linux in one file, including the
+`sys_platform == "win32"` markers D22 requires, and is committed to git. The
+Windows machine runs `uv sync` and gets byte-identical versions.
+
+**Why not the `requirements.txt` D22 assumed:** a flat requirements file pins
+direct dependencies but not the resolved transitive graph, so two machines
+resolving on different days can land on different sub-dependency versions. Given
+the whole workflow is "write on Linux, run on Windows" (D22), the lockfile is
+the mechanism that makes "it worked on my machine" a testable claim rather than
+a hope. `uv 0.11.7` is already installed on the dev machine.
+
+**Consequence:** `pyproject.toml` + `uv.lock` replace `requirements.txt`. D22's
+requirement that platform-specific deps carry environment markers is unchanged —
+it just moves into `pyproject.toml`.
+
+### D40. A `doctor` preflight command, built in step 1
+`python -m speech_translator.doctor` checks and prints pass/fail for: Python
+version, resolved package versions against the lock, `ctranslate2.get_cuda_device_count()`,
+cuDNN/cuBLAS DLL load, Whisper model cache presence, a WASAPI loopback device,
+and one 5-character live translation.
+
+**Why it earns its place before the pipeline exists:** every item on the D41
+register fails on the *other* machine, hours after the code was written, with an
+error message pointing at the wrong layer. A preflight converts each of those
+into a line item that says which thing is missing. It is also the first thing to
+run on the Windows box after every `git pull`, which is the actual dev loop
+(D22).
+
+### D41. Portability register — the known "works on my machine" failures
+Recorded as a checklist because each one is invisible on the machine that writes
+the code.
+
+| Risk | Mitigation |
+|---|---|
+| torch pulled in by Silero | eliminated by D35 |
+| cuBLAS/cuDNN DLLs missing for CTranslate2 on Windows | take them from the `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` **pip wheels**, pinned in the lockfile — not hand-copied DLLs, which are unreproducible |
+| Whisper weights downloaded on first run | pre-download; pin the cache directory in config; surface it in the `loading` state (D27) |
+| Google API key absent | `.env.example`; caught by `doctor` (D40) |
+| **Windows console is cp1252** | printing a Spanish or Japanese caption to the terminal raises `UnicodeEncodeError` and kills the thread it happens on. Force UTF-8 on all stream handlers and log files |
+| Audio device variance | read the device's `defaultSampleRate`; never hard-code 48000; the source normalises (D24) |
+| Default output device changes mid-session (headphones) | detect the stream error and surface `error` state with a re-select action rather than dying silently |
+| CRLF/LF across two machines | `.gitattributes` with `* text=auto eol=lf` |
+| Port already in use | port is config, not a literal |

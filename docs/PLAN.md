@@ -1,0 +1,270 @@
+# Build Plan
+
+The ladder from an empty repo to a demonstrable product. **One level at a time**;
+each level's acceptance criteria must pass before the next begins.
+
+- `STATE.md` says *where we are*. This file says *where we are going*.
+- `INTERFACES.md` says *what each stage's contract is*. This file says *when it
+  gets built and how you know it works*.
+- Every level names what it **unblocks**, so the cost of skipping one is visible.
+
+**Where each level can be built** matters because of D22 — written on Linux, run
+on Windows, git as the bridge. A level marked *Windows* cannot be verified on the
+dev laptop no matter how finished the code looks.
+
+| Level | Name | Build on | Status |
+|---|---|---|---|
+| 0 | Foundation | both | not started |
+| 1 | Audio capture | Linux code / Windows verify | not started |
+| 2 | Segmentation | Linux | not started |
+| 3 | **Benchmark (gate)** | **Windows only** | not started |
+| 4 | Transcription | Linux code / Windows run | not started |
+| 5 | Sentences + translation | Linux | not started |
+| 6 | Server + UI | Linux (fake ASR) / Windows real | not started |
+| 7 | Tuning + evidence | **Windows only** | not started |
+| 8 | Demo + journey doc | Windows | not started |
+
+---
+
+## Level 0 — Foundation
+
+**Goal:** a repo that installs identically on both machines and can tell you what
+is missing on either.
+
+**Deliverables**
+- `pyproject.toml` + committed `uv.lock` (D39). Platform deps carry
+  `sys_platform == "win32"` markers (D22).
+- `speech_translator/` package; `config.py` holding the D25 values.
+- Vendored `assets/silero_vad.onnx` (2.3 MB, MIT). **No torch, ever** (D35).
+- `.env.example`, `.gitattributes` (`* text=auto eol=lf`), UTF-8 forced on all
+  stream handlers and log files (D41).
+- `python -m speech_translator.doctor` (D40).
+
+**Acceptance**
+- [ ] `uv sync` succeeds on Linux **and** Windows from the same lockfile.
+- [ ] `import speech_translator` succeeds on Linux (D22 — no eager Windows imports).
+- [ ] `doctor` runs on both and reports honestly: on Linux, CUDA and loopback
+      report **fail** and that is the correct output, not a bug.
+- [ ] `pip list | grep torch` returns nothing.
+
+**Unblocks** everything. **Risk:** low.
+
+---
+
+## Level 1 — Audio capture
+
+**Goal:** 16 kHz mono int16 frames coming out of a real meeting, and a WAV file
+of the same for offline work.
+
+**Deliverables**
+- `AudioSource` Protocol; frame constants (16 kHz, mono, int16, 512 samples).
+- Format layer: decode → downmix → **streaming** resample (`soxr.ResampleStream`,
+  so filter state carries across chunks) → exact 512-sample frames. Inside the
+  source (D24).
+- `WavFileSource` (realtime and as-fast-as-possible) — tests + Linux smoke path.
+- `WasapiLoopbackSource` — lazy `pyaudiowpatch` import (D22).
+- `tools/list_devices`, `tools/record_loopback`.
+
+**Acceptance**
+- [ ] Every emitted frame is exactly 1024 bytes; total sample count matches
+      source duration to within one frame.
+- [ ] A 48 kHz stereo WAV and a 16 kHz mono WAV both produce identical-shaped
+      output; the 16 kHz mono path is bit-exact (no needless float round-trip).
+- [ ] `record_loopback` on Windows captures 10 minutes of meeting audio that
+      plays back cleanly — correct pitch, no clicks at chunk boundaries.
+- [ ] Unit tests pass on Linux with no audio hardware.
+
+**Unblocks** Level 2, and **the benchmark's sample audio** — `BENCHMARK.md`
+sources its input through `record_loopback`, so this is on the critical path.
+
+**Risk:** medium. Device format variance; clicks if the resampler is
+re-instantiated per chunk.
+
+---
+
+## Level 2 — Segmentation
+
+**Goal:** utterances, not frames.
+
+**Deliverables**
+- Silero wrapper over the vendored ONNX via `onnxruntime`, state carried between
+  frames (D35).
+- `Segmenter` — close on silence **or** max-length (D12) at the D25 values;
+  accepts a **runtime override** of effective `max_utterance_ms` so Level 6's
+  controller can shrink it (D28).
+- `min_utterance_ms` discard (D30); `preceding_silence_ms`; `speaking` side channel.
+- `tools/dump_utterances`.
+
+**Acceptance**
+- [ ] On a captured meeting WAV, boundaries land at real pauses on inspection.
+- [ ] No utterance exceeds `max_utterance_ms`.
+- [ ] Silence-only and music-only input produce **zero** utterances.
+- [ ] Sub-300 ms blips are discarded, not emitted.
+- [ ] VAD cost stays near the measured 0.156 ms/frame.
+
+**Unblocks** Level 3 (realistic chunk lengths) and Level 4.
+
+**Risk:** medium — this is one of the two places tuning time goes (D12).
+
+---
+
+## Level 3 — Benchmark  ⛔ GATE
+
+**Goal:** the two config values that Level 4 cannot be written without.
+
+Not code. A measurement, run per `BENCHMARK.md` on the Windows machine, with a
+browser open (D18).
+
+**Deliverables**
+- Hardware survey table filled in (driver, CUDA, VRAM at idle, CPU/RAM).
+- 7 configurations × 10 minutes sustained, first-minute vs last-minute RTF.
+- Filled results table including the **p95 word age** column.
+- Selected `model_size` + `compute_type` written into config.
+
+**Acceptance**
+- [ ] `ctranslate2.get_cuda_device_count()` returns `1` before any timing is trusted.
+- [ ] At least one configuration passes **all three** gates: sustained RTF < 0.5,
+      VRAM leaves room for desktop + browser, **p95 word age < 7 s**.
+- [ ] The chosen config is the *fastest that is accurate enough*, not the largest
+      that fits (D26).
+- [ ] Throttling penalty (first vs last minute) recorded.
+
+**Unblocks** Level 4. **Nothing after this level can start without it.**
+
+**Risk:** high — the cuDNN/cuBLAS DLL trap (D41), and the possibility that
+nothing clears all three gates, in which case `BENCHMARK.md`'s fallback ladder
+applies.
+
+---
+
+## Level 4 — Transcription
+
+**Goal:** utterances become punctuated, language-tagged text.
+
+**Deliverables**
+- Worker **process** with `spawn` ready-handshake before the UI reports running
+  (D27). Bounded IPC queue, `maxsize = 4`.
+- `faster-whisper` at the benchmark's config; `beam_size=1`,
+  `condition_on_previous_text=False`, `vad_filter=False`.
+- `Transcript` incl. `no_speech_prob` / `avg_logprob`; hallucination guard (D30).
+- Confidence-weighted LID over the first ~10 s of speech, then lock (D32).
+- JSONL timing log (D34).
+
+**Acceptance**
+- [ ] WAV in → correct punctuated text out, correct language detected.
+- [ ] Near-silence and noise produce **no** caption rather than "Thank you."
+- [ ] Worker load failure surfaces as `error` state, not a hang.
+- [ ] Per-utterance RTF appears in the JSONL log.
+
+**Unblocks** Level 5. **Risk:** medium-high — first CUDA-in-anger level.
+
+---
+
+## Level 5 — Sentences and translation
+
+**Goal:** caption-sized, translated text, in order, within budget.
+
+**Deliverables**
+- `SentenceSplitter` — carry-over fragment **and the flush rule** (D29).
+- `Translator` over REST + API key (D37), behind an interface.
+- Single serialized translation task preserving order (D27).
+- LRU cache; persisted monthly character counter; `src == tgt` skip (D31).
+- Failure path → `target_text = null` + `mt_error`, never a stall.
+
+**Acceptance**
+- [ ] A mid-sentence max-length cut recombines into one correct sentence.
+- [ ] A held fragment **is emitted** on stop / long silence — the last words of a
+      session must appear.
+- [ ] Captions arrive in spoken order under concurrent translation.
+- [ ] Character counter survives a process restart.
+- [ ] Forced API failure degrades to source-only without blocking the pipeline.
+
+**Unblocks** Level 6. **Risk:** medium. The flush rule is the easy thing to miss.
+
+---
+
+## Level 6 — Server and UI
+
+**Goal:** the thing you actually demonstrate.
+
+**Deliverables**
+- FastAPI + uvicorn serving static UI **and** WebSocket in one process (D38).
+- Full message protocol per `INTERFACES.md` §6.
+- Backpressure controller: adaptive shrink → drop oldest, with `dropped` events (D28).
+- UI: six defined states (PRD), caption cards translation-primary /
+  source-secondary (D33), speaking indicator, health badge, language chips with
+  override, gap markers from `preceding_silence_ms`, auto-scroll with jump-to-live,
+  transcript export.
+
+**Acceptance**
+- [ ] End to end: loopback audio → captions in the browser.
+- [ ] All six states reachable and visually distinct.
+- [ ] Captions never rewrite themselves (D11).
+- [ ] `word_age_ms` and `rtf` both visible.
+- [ ] Killing the network mid-session degrades to source-only captions, visibly.
+- [ ] UI is usable with no explanation — test by handing it to someone cold.
+
+**Buildable on Linux** against a fake transcriber, which is worth doing: UI work
+is the most iteration-heavy and the dev loop should not be push-pull-run.
+
+**Risk:** medium — scope creep lives here.
+
+---
+
+## Level 7 — Tuning and evidence
+
+**Goal:** turn "it works" into "here are the numbers".
+
+**Deliverables**
+- 10-minute sustained live run on the demo machine, browser open.
+- JSONL log → latency histogram, RTF curve, queue-depth graph, **p95 word age**.
+- Tuning pass on `silence_threshold_ms` / `max_utterance_ms` against real speech.
+- `BENCHMARK.md` and `PRD.md` DoD updated with measured results.
+
+**Acceptance**
+- [ ] p95 word age < 7 s **measured end to end**, not inferred from RTF.
+- [ ] Queue depth stays at 0–1 for the whole run.
+- [ ] No CUDA OOM across 10 minutes with a browser open.
+- [ ] Every PRD Definition-of-Done box ticked, each with evidence.
+
+**Risk:** medium — this is where a passing benchmark meets real speech.
+
+---
+
+## Level 8 — Demo and journey doc
+
+**Goal:** the graded deliverable.
+
+**Deliverables**
+- Demo script: which audio, which language pair, what to say about the tradeoffs.
+- Rehearsal on the demo machine, including the failure fallbacks.
+- Journey doc assembled from `docs/journey/` with screenshots and prompt logs.
+
+**Acceptance**
+- [ ] Demo runs start to finish twice without intervention.
+- [ ] Journey doc delivered **48 h before the interview**.
+- [ ] A stated answer for: what happens if the network drops mid-demo.
+
+**Risk:** the deadline is still unknown (see `STATE.md` → Blocked).
+
+---
+
+## Traceability — which level satisfies which DoD item
+
+| PRD Definition of Done | Level |
+|---|---|
+| Captures system audio on Windows | 1 |
+| Source language auto-detected, displayed, overridable | 4 (detect) + 6 (UI) |
+| Target language selectable | 6 |
+| Captions do not rewrite themselves | 6 |
+| p95 word age < 7 s | 7 (measured), 3 (predicted) |
+| Output correctly punctuated | 4 |
+| UI needs no explanation | 6 |
+| Sustained RTF < 0.5 | 3 (predicted), 7 (confirmed) |
+| Journey doc | 8, written continuously from level 0 |
+
+## What is deliberately not on this ladder
+
+Speaker diarization (D9/D21 — reopen only if Level 3 shows headroom), Linux
+capture (D17), TTS (D5), microphone/two-way (D4), meeting-platform integrations
+(D10), desktop shell (D13), scaling (D14).

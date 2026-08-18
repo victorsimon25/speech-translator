@@ -95,6 +95,19 @@ that turns out to be what the brief means. It costs nothing to populate.
 The Segmenter also emits a continuous boolean `speaking` signal for the live UI
 indicator (D11). That is a side channel, not part of `Utterance`.
 
+**VAD runtime.** Silero from a **vendored `silero_vad.onnx`** (2.3 MB, in the
+repo) via `onnxruntime`. The `silero-vad` PyPI package is *not* a dependency —
+it imports torch unconditionally, which would put a second CUDA runtime on a
+4 GB card (D35).
+
+```
+inputs : input [N, 512] float32 · state [2, N, 128] float32 · sr int64
+outputs: output [N, 1] float32  · stateN
+```
+
+State is carried between frames; it is not stateless per frame. Measured cost:
+**0.156 ms per 32 ms frame** (D35).
+
 ---
 
 ## 3. Transcriber
@@ -177,9 +190,11 @@ class Translation:
     mt_error: str | None
 ```
 
-Google Cloud Translation, free tier (D7). Keep this behind an interface — the
-provider is the most likely thing to change, and the free-tier character budget
-is finite.
+Google Cloud Translation, free tier (D7), called over **REST with an API key**
+rather than the client library (D37) — one `httpx` POST to
+`translation.googleapis.com/language/translate/v2`, key from `.env`. Keep this
+behind an interface: the provider is the most likely thing to change, and the
+free-tier character budget is finite.
 
 **Consumed by exactly one serialized task (D27).** Transcripts leave the worker
 in FIFO order, but concurrent translations can complete out of order and would
@@ -202,6 +217,9 @@ removes the need for a reorder buffer.
 ---
 
 ## 6. Publisher → UI (WebSocket, JSON)
+
+**FastAPI + uvicorn**, one process serving both the static UI and the WebSocket
+(D38). The UI is plain HTML/CSS/JS — no npm, no bundler, no build step.
 
 The Publisher **joins** each `Translation` back to its `Sentence` by
 `sentence_id`. `Translation` deliberately carries only what the translator

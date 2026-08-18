@@ -115,10 +115,13 @@ calculated.
 ## Method
 
 1. Environment: `faster-whisper` (CTranslate2 backend) on CUDA. The known
-   Windows trap is that the required cuBLAS and cuDNN DLLs are not bundled —
-   resolve that and verify with
+   Windows trap is that the required cuBLAS and cuDNN DLLs are not bundled.
+   Take them from the **`nvidia-cublas-cu12` / `nvidia-cudnn-cu12` pip wheels**
+   pinned in `uv.lock` (D39, D41) rather than hand-copying DLLs, which is not
+   reproducible on the next machine. Verify with
    `python -c "import ctranslate2; print(ctranslate2.get_cuda_device_count())"`
-   returning `1` **before** benchmarking anything. Write down whatever worked.
+   returning `1` **before** benchmarking anything — `python -m speech_translator.doctor`
+   checks this and the rest of the register (D40). Write down whatever worked.
 2. Sample audio: 10+ minutes of natural speech in a non-English language,
    meeting-like rather than studio-clean. Capture it with
    `python -m speech_translator.tools.record_loopback` while playing a
