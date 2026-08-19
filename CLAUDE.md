@@ -36,6 +36,10 @@ Python 3.12. Two processes: a `faster-whisper` CUDA worker, and everything else
 4. `docs/DECISIONS.md` — why things are the way they are. Check before
    proposing a change.
 
+**If you are running on the Windows demo machine**, `docs/WINDOWS.md` is the
+runbook: closing Levels 0-2 and executing Level 3's benchmark, with the docs to
+update afterwards.
+
 ## Hard rules
 - Free tiers only. No paid API calls.
 - **4 GB VRAM is the ceiling**, and it is shared with the Windows desktop and

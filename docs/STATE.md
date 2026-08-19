@@ -146,6 +146,11 @@ is the measurement, and it is blocked on Level 1's 10-minute recording, which is
 its input. See [`PLAN.md`](PLAN.md) for the full ladder and each level's
 acceptance criteria.
 
+**[`WINDOWS.md`](WINDOWS.md) is the runbook for that session** — the commands
+below in full, what to record, what to do when the DLL trap bites, and the list
+of docs to update afterwards. It also carries the prompt to start the session
+with.
+
 **On the Windows machine, now four levels' worth and no longer just a
 formality:**
 
