@@ -1025,3 +1025,107 @@ no room tone, no music bed, no overlapping speakers and no reverb — precisely
 what D23 chose Silero to survive. The fixture proves the VAD is alive and the
 state machine behaves. It is **not** the captured meeting WAV `PLAN.md` asks for,
 and Level 2's first acceptance criterion stays open until that recording exists.
+
+---
+
+## 2026-08-19 — Session 8 (Level 3, the benchmark harness)
+
+### D57. The benchmark chunks at the Segmenter's real utterance distribution
+`BENCHMARK.md` step 3 said "process the sample in chunks matching the planned
+utterance length — **4 s, per D25**", with a clause beginning *"if Level 2 is not
+built yet"*. Level 2 is built (649740a), so the clause no longer applies and
+**D52's stated cost does not have to be paid**: a fixed-4 s benchmark is
+optimistic, not neutral, because real utterances close on *silence* far more
+often than on max-length and shorter chunks amortise per-call overhead over less
+audio.
+
+**Decision: the primary chunker is the real `Segmenter`, driven over the
+recording.** Three reasons, in order of weight:
+
+1. **It is the workload.** A fixed 4 s slice contains the closing silence the
+   Segmenter would have trimmed and lacks the pre-roll it would have prepended
+   (D55). Same audio file, different bytes, different cost. Measuring the slices
+   measures something the app never sends.
+2. **It removes the optimism** D52 had to accept on the way in. The distribution
+   is measured and reported (p50 / p95 / max) rather than assumed, so if it comes
+   out near 4 s after all, that is a finding rather than a coincidence.
+3. **It is comparable across rows.** The Segmenter is deterministic over a WAV,
+   so the harness cuts the audio **once, up front** and hands byte-identical
+   chunks to all seven configurations. Otherwise an RTF difference between two
+   rows could be a difference in what was measured. It also puts the VAD's own
+   cost outside the timed region, where it belongs.
+
+**D52's bracket is kept, not dropped.** `--chunking fixed --chunk-ms 4000` and
+`--chunk-ms 1500` still exist, and are run for the **selected** configuration
+only — about 20 minutes, rather than tripling a 70-minute matrix. If the short
+bracket fails a gate the segmenter run passes, that is the finding, and it is the
+one the headline table would otherwise hide.
+
+`BENCHMARK.md` step 3 is rewritten to match. **D52 is not edited**: it is an
+accurate record of the argument as it stood, and this project supersedes by
+appending (D12 under D25, D6 under D16) rather than by rewriting history.
+
+**Cost, stated:** the chunk list now depends on the VAD thresholds, which are
+TUNABLE and not yet calibrated against real meeting audio (D54, D55). A retune at
+Level 7 changes the distribution and therefore the RTF denominator. The mitigation
+is that the distribution is recorded in `results.json`, so a later comparison is
+possible rather than guesswork.
+
+### D58. The Linux dry run gets both a stub engine and a real CPU model, and the stub is the default
+D51 requires the harness to be dry-run on Linux before it is trusted on Windows.
+Two ways to do that and they prove different things, so the answer is both — but
+which one is the default matters.
+
+- **`--engine stub`, the default for `--dry-run`.** No weights, no network, no
+  GPU, and an injectable clock, so a simulated ten-minute run costs
+  milliseconds. This is what lets the dry run live in `pytest` rather than be
+  something a person remembers to do. It exercises the chunk loop, the warm-up
+  exclusion, model-load exclusion, the wall-clock minute split, the percentiles,
+  the gate arithmetic, the incremental writes, the OOM path and the table.
+- **`--engine faster-whisper --device cpu`.** A real `WhisperModel`, real
+  weights, real decoding. This is the once-per-change smoke test, and it is the
+  only thing that proves the call signature is right and that the run is not
+  timing an empty generator.
+
+**Why not the stub alone:** `model.transcribe()` returns a **lazy generator** and
+decodes nothing until it is drained. A harness that times the call without
+consuming it reports an RTF near zero and is internally consistent while doing
+so. A stub cannot catch that, because a stub does whatever the harness asks. So
+the generator is drained inside `FasterWhisperEngine.transcribe`, and there is a
+test with a fake `WhisperModel` returning a genuinely lazy generator that asserts
+it was consumed — no weights required.
+
+**Why not the real model alone:** it needs a network and ~75 MB on first run,
+which is exactly the kind of dependency that turns a test suite into a thing
+people skip.
+
+**What the dry run does not touch, stated so it is not mistaken for coverage:**
+`get_cuda_device_count() == 1` against a device, `add_cuda_dll_directories()`
+against a real DLL path, VRAM polling (there is no `nvidia-smi` on the dev box),
+thermal throttling, and a genuine CUDA OOM. Those are owed to the Windows
+machine — which is the point of naming them here rather than letting a green test
+run imply otherwise.
+
+### D59. "Ten sustained minutes" is ten minutes of wall clock, and the audio loops
+`BENCHMARK.md` says "run for at least 10 minutes continuously per
+configuration"; D51 and `PLAN.md` both price the matrix at ~70 minutes. Those
+only reconcile one way. Ten minutes of *audio* at RTF 0.3 is a three-minute run,
+the whole matrix is ~25 minutes, and the GPU never gets hot enough for
+"first-minute vs last-minute RTF" to measure anything — which is the number
+`BENCHMARK.md` says predicts demo behaviour.
+
+**Decision: chunks are fed back-to-back, looping the recording, until the
+wall-clock budget is spent.** Laps and total audio processed are recorded, and
+the first/last-minute windows split on wall clock. A ten-minute recording is
+therefore played through roughly three times per configuration.
+
+Looping is safe here because `condition_on_previous_text=False` (step 4) makes
+each chunk independent — there is no cross-chunk state to be corrupted by a seam
+back to the beginning.
+
+**Stated cost.** Back-to-back is a *heavier* duty cycle than the live app, whose
+GPU is idle between utterances for the fraction of time given by `1 − RTF`. So
+this overstates thermal load. That is the direction to be conservative in for a
+gate whose whole purpose is to catch a machine that flatters itself when cold,
+and the alternative — pacing chunks at wall-clock speed — would spend ten minutes
+to collect three minutes of GPU time.

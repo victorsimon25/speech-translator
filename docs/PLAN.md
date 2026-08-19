@@ -17,7 +17,7 @@ dev laptop no matter how finished the code looks.
 | 0 | Foundation | both | **done on Linux; Windows half unverified** |
 | 1 | Audio capture | Linux code / Windows verify | **done on Linux; Windows half unverified** |
 | 2 | Segmentation | Linux | **done on Linux; real-speech inspection owed to Windows** |
-| 3 | **Benchmark (gate)** | **Windows only** | next (blocked on Level 1's recording) |
+| 3 | **Benchmark (gate)** | harness on Linux / **measurement Windows only** | **harness built and dry-run on Linux; the measurement is owed to Windows** |
 | 4 | Transcription | Linux code / Windows run | not started |
 | 5 | Sentences + translation | Linux | not started |
 | 6 | Server + UI | Linux (fake ASR) / Windows real | not started |
@@ -171,12 +171,16 @@ Not code. A measurement, run per `BENCHMARK.md` on the Windows machine, with a
 browser open (D18).
 
 **Deliverables**
-- **`tools/benchmark.py`** — the harness. 7 configurations × 10 minutes is ~70
-  minutes of runs with per-chunk timing, VRAM polling and first/last-minute RTF
-  split; that is not a job for a REPL. **Written and dry-run on Linux against
-  `WavFileSource`, executed on Windows** (D51) — the only Windows-specific thing
-  in it is that a GPU answers. Emits the results row as JSON so the table is
-  transcribed, not retyped.
+- **`tools/benchmark.py`** — the harness. **Built.** 7 configurations × 10
+  minutes is ~70 minutes of runs with per-chunk timing, VRAM polling and
+  first/last-minute RTF split; that is not a job for a REPL. **Written and
+  dry-run on Linux against `WavFileSource`, executed on Windows** (D51) — the
+  only Windows-specific thing in it is that a GPU answers. Emits the results row
+  as JSON so the table is transcribed, not retyped.
+  - *Added during the level:* chunking at the Segmenter's real utterance
+    distribution rather than a fixed 4 s, now that Level 2 exists (D57); a stub
+    engine so the dry run lives in `pytest` (D58); and "ten sustained minutes"
+    resolved as ten minutes of **wall clock** with the audio looped (D59).
 - Hardware survey table filled in (driver, CUDA, VRAM at idle, CPU/RAM).
 - 7 configurations × 10 minutes sustained, first-minute vs last-minute RTF.
 - Filled results table including the **p95 word age (predicted)** column, and a
@@ -184,17 +188,42 @@ browser open (D18).
 - Selected `model_size` + `compute_type` written into config.
 
 **Acceptance**
+
+Every box below is a **measurement**, and all five are owed to the Windows
+machine. The harness that will take them is built and tested; that is not the
+same thing, and this level does not advance until the recording exists and the
+runs happen.
+
 - [ ] `ctranslate2.get_cuda_device_count()` returns `1` before any timing is trusted.
+      *The guard is built and tested — `require_cuda()` refuses to time anything
+      and names D36 in the message — but a count of 1 has never been observed
+      from this repo. On Linux it returns 0, which is the correct answer here.*
 - [ ] At least one configuration passes **all three** gates: sustained RTF < 0.5,
       VRAM leaves room for desktop + browser, **p95 word age < 7 s** (predicted
       here from measured RTF and a measured MT round trip; Level 7 measures it
       end to end — see `BENCHMARK.md` gate 3 and D51).
+      *Gate arithmetic is implemented and tested against hand-computed cases,
+      including that an unmeasured MT term leaves gate 3 `unknown` rather than
+      substituting 300 ms. No configuration has been run on a GPU.*
 - [ ] The chosen config is the *fastest that is accurate enough*, not the largest
-      that fits (D26).
+      that fits (D26). *Not automatable and deliberately not automated: "enough"
+      is a listening test. The harness keeps sample transcripts in
+      `results.json` for that judgement and prints that it is not making it.*
 - [ ] Throttling penalty (first vs last minute) recorded.
+      *The split is implemented and tested — including that the warm-up chunk is
+      excluded from the first minute, which it would otherwise dominate. A real
+      penalty needs a GPU that throttles.*
 - [ ] The harness runs on Linux against a WAV before it is trusted on Windows —
       a benchmark whose first execution is on the machine that matters is a
       benchmark you are debugging instead of running.
+      **Partially met, and the remainder is honest to state.** *It runs here
+      against `assets/speech_fixture.wav`: 49 tests, plus two real invocations —
+      one with the stub engine, one with `faster-whisper tiny` decoding on CPU
+      (RTF 0.137 over 82 chunks, load excluded, warm-up separate, transcripts
+      correct). What it has **not** run against is the input it was written for:
+      the 10-minute `record_loopback` capture does not exist yet. A 13.9 s
+      fixture looped 20 times exercises the machinery; it does not exercise a
+      real utterance-length distribution.*
 
 **Unblocks** Level 4. **Nothing after this level can start without it.**
 

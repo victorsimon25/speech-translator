@@ -145,19 +145,28 @@ calculated.
    Spanish-language interview or podcast — the capture stage produces its own
    benchmark input, and that exercises the real path rather than a curated file.
    Keep the recipe here; keep the audio out of git.
-3. Process the sample in chunks matching the planned utterance length —
-   **4 s, per D25** (not the 6–8 s D12 originally suggested; that range is
-   superseded). Record per-chunk processing time. Shorter chunks change the
-   picture: per-call overhead is amortised over less audio, so RTF at 4 s can be
-   meaningfully worse than at 8 s. Measure at the length the app will use.
+3. Process the sample in chunks matching the planned utterance length. **Level 2
+   is built, so the chunks come from the real `Segmenter` (D57)** — the actual
+   utterance-length distribution, with pre-roll prepended and closing silence
+   trimmed (D55), which is byte-for-byte the audio the app will hand Whisper.
+   Record per-chunk processing time.
 
-   **If Level 2 is not built yet**, fixed 4 s chunks are the substitute, and they
-   are optimistic: real utterances close on *silence* far more often than on
-   max-length, so the true distribution is skewed shorter than 4 s and therefore
-   worse in RTF. Bracket it instead of assuming — run the selected configuration
-   at **1.5 s as well as 4 s** and report both. If the short bracket fails a gate
-   the 4 s number passes, that is the finding, and it is one the headline table
-   would have hidden.
+   Chunk length is not a detail: per-call overhead is amortised over less audio,
+   so RTF at 4 s can be meaningfully worse than at 8 s, and real utterances close
+   on *silence* far more often than on max-length, so the true distribution skews
+   shorter than 4 s. A fixed-4 s benchmark is **optimistic, not neutral** — which
+   is the cost D52 was prepared to pay and D57 no longer has to. The harness
+   records the distribution it actually cut (count, p50, p95, max, and the
+   silence/max-length split) into `results.json`, so this is measured rather than
+   assumed.
+
+   The audio is cut **once, up front, and reused for all seven configurations**,
+   so an RTF difference between two rows is a difference in the model and not in
+   what was measured.
+
+   **D52's bracket survives as a check on the selected row**: re-run the winner at
+   fixed 4 s and fixed 1.5 s (`--chunking fixed --chunk-ms 1500`) and report all
+   three. If a bracket fails a gate the headline run passes, that is the finding.
 4. Benchmark **the configuration the app will actually use**, or the number is
    fiction:
    - `beam_size=1` — greedy, as the real-time path will be
@@ -177,10 +186,15 @@ A laptop GPU cannot hold boost clocks indefinitely any more than the U-series CP
 could. A cold 30-second benchmark will flatter the machine and then fail live,
 which is the worst possible time to discover it.
 
-- Run for **at least 10 minutes continuously** per configuration.
-- Report RTF for the **first minute** and the **last minute** separately. The
-  difference is the throttling penalty, and it is the number that predicts demo
-  behaviour.
+- Run for **at least 10 minutes of wall clock** per configuration, looping the
+  recording as needed (D59). Ten minutes of *audio* is not the same test: at
+  RTF 0.3 that is a three-minute run, and a GPU that never gets hot cannot report
+  a throttling penalty. Seven configurations x 10 wall-clock minutes is the ~70
+  minutes this level is budgeted at.
+- Report RTF for the **first minute** and the **last minute** separately, split on
+  wall clock. The difference is the throttling penalty, and it is the number that
+  predicts demo behaviour. The warm-up chunk is excluded from the first-minute
+  figure, which it would otherwise dominate.
 - Log GPU state across the run:
 
   ```
@@ -190,9 +204,36 @@ which is the worst possible time to discover it.
 - **Run it with a browser open**, because the demo has one and it is competing
   for the same 4 GB.
 
+## The harness
+
+Do not drive this from a REPL (D51). `python -m speech_translator.tools.benchmark`
+runs the whole method:
+
+```
+python -m speech_translator.tools.benchmark --input-wav <the 10-minute capture>
+```
+
+- Defaults to the seven configurations below, 10 wall-clock minutes each,
+  Segmenter chunking, `--language es`.
+- Refuses to time anything until `ctranslate2.get_cuda_device_count()` returns 1
+  (D36), and calls `add_cuda_dll_directories()` before importing it (D41, D43).
+- Measures `MT_roundtrip` from ten live calls and takes the p95. **With no API
+  key it records the term as missing and gate 3 reports `unknown`** — it never
+  substitutes the guessed 300 ms (D51).
+- Writes `results.json`, `results.md` (the table below, ready to transcribe),
+  `chunks-*.jsonl` and `gpu.jsonl` into `var/benchmark/<timestamp>/`,
+  **incrementally** — a configuration that OOMs is a failed row and the matrix
+  continues to the next one.
+- `--dry-run` exercises the whole harness with a stub engine, no weights and no
+  GPU (D58). `--render results.json` re-renders the table without running.
+
+It **reports; it does not choose.** Pre-download the weights before the timed
+run, or the first configuration's `load_s` is mostly a download.
+
 ## Report
 
-Write results into this file and update `STATE.md`.
+Write results into this file and update `STATE.md`. The table below is what
+`results.md` emits — transcribe it rather than retyping it.
 
 | Model | compute_type | RTF (first min) | RTF (last min) | Peak VRAM | p95 word age *(predicted)* | Under 0.5 sustained? | Word age < 7 s? | Fits alongside browser? | Notes |
 |---|---|---|---|---|---|---|---|---|---|

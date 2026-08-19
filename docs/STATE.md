@@ -1,6 +1,6 @@
 # State
 
-_Last updated: 2026-08-18 (session 7 — Level 2 built)_
+_Last updated: 2026-08-19 (session 8 — Level 3's harness built)_
 
 ## Done
 - Requirements and architecture agreed (see `DECISIONS.md`).
@@ -109,14 +109,44 @@ _Last updated: 2026-08-18 (session 7 — Level 2 built)_
     the repo the whole stage can be dead and green.
   - 54 new tests; **104 pass** on Linux with no GPU, no audio hardware, no
     network.
+- **Level 3's harness built and dry-run on Linux.** The code half of the gate.
+  **No benchmark numbers exist**, and none can until the recording does.
+  - `speech_translator/tools/benchmark.py` executes `BENCHMARK.md`: seven
+    configurations, per-chunk timing, warm-up and model load excluded from RTF,
+    first-minute vs last-minute split, `nvidia-smi` polled at 1 Hz, the three
+    gates evaluated, and `results.json` + `results.md` written **incrementally**
+    so a configuration that OOMs is a failed row and the matrix carries on (D51).
+  - **Three decisions, argued rather than defaulted** (D57–D59): chunks come from
+    the real `Segmenter` now that Level 2 exists, cut **once** and shared
+    byte-identically by all seven rows, with D52's fixed 4 s / 1.5 s bracket kept
+    for the selected row; the dry run uses a stub engine by default and a real
+    CPU model behind a flag; and "ten sustained minutes" is ten minutes of **wall
+    clock** with the audio looped, which is the only reading under which
+    7 × 10 min is the ~70 minutes D51 budgeted.
+  - **`MT_roundtrip` is measured, never assumed.** Ten live calls, p95. With no
+    API key the term is recorded as *missing* and gate 3 reports `unknown`; the
+    guessed 300 ms is not substituted anywhere, and there is a test for that.
+    Gate 3's column says **predicted** in the JSON, the markdown and the console.
+  - The CUDA guard refuses to time anything until `get_cuda_device_count()`
+    returns 1, and names D36 when it does not — a silent CPU fallback would
+    produce seven rows of fiction rather than a slow run.
+  - 49 new tests; **153 pass** on Linux with no GPU, no weights, no network.
+    Two real invocations besides: the stub engine, and `faster-whisper tiny`
+    decoding on CPU (RTF 0.137 over 82 chunks, correct transcripts) — which is
+    what proves the lazy `segments` generator is drained inside the timed region
+    rather than timed empty.
+  - **What the harness cannot prove here:** that a GPU answers. VRAM polling,
+    thermal throttling, a real OOM and `get_cuda_device_count() == 1` are all
+    owed to the demo machine, and so is the input — see Blocked.
 
 ## Next
 
-**Level 3 — Benchmark (gate), on Windows.** It is blocked on Level 1's
-10-minute recording, which is its input. See [`PLAN.md`](PLAN.md) for the full
-ladder and each level's acceptance criteria.
+**Level 3 — Benchmark (gate), on Windows.** The harness is built; what is left
+is the measurement, and it is blocked on Level 1's 10-minute recording, which is
+its input. See [`PLAN.md`](PLAN.md) for the full ladder and each level's
+acceptance criteria.
 
-**On the Windows machine, now three levels' worth and no longer just a
+**On the Windows machine, now four levels' worth and no longer just a
 formality:**
 
 ```
@@ -127,7 +157,15 @@ python -m speech_translator.tools.list_devices           # Level 1
 python -m speech_translator.tools.record_loopback -t 600 # Level 1 + BENCHMARK input
 python -m speech_translator.tools.dump_utterances \
     --input-wav <that recording> --write-wav utts/       # Level 2, the open box
+python -m speech_translator.tools.benchmark \
+    --input-wav <that recording>                         # Level 3, ~70 minutes
 ```
+
+Pre-download the Whisper weights before the timed run, or the first
+configuration's `load_s` is mostly a download. Open a browser first — gate 2 is
+about the card the browser is already drawing from (D18). Expect the harness to
+refuse to start if `get_cuda_device_count()` is not 1; that refusal is the
+feature.
 
 Then **listen to `utts/`**. That is Level 2's one open acceptance criterion —
 boundaries landing at real pauses on real meeting audio — and it costs nothing
@@ -145,7 +183,7 @@ recording is also Level 3's benchmark input, so it is wanted anyway.
 | 0 | Foundation — skeleton, `uv.lock`, vendored ONNX, `doctor` | **done (Linux); Windows run owed** |
 | 1 | Audio capture — `AudioSource`, WASAPI + WAV, capture tools | **done (Linux); Windows run owed** |
 | 2 | Segmentation — Silero VAD, `Utterance` | **done (Linux); real-speech inspection owed** |
-| 3 | **Benchmark (gate)** — Windows only; picks model + `compute_type` | **next; blocked on Level 1's recording** |
+| 3 | **Benchmark (gate)** — picks model + `compute_type` | **harness built (Linux); the measurement is blocked on Level 1's recording** |
 | 4 | Transcription — worker process, hallucination guard, LID | |
 | 5 | Sentences + translation — carry-over, flush, budget | |
 | 6 | Server + UI — FastAPI, six states, caption cards | |
@@ -162,9 +200,10 @@ costs nothing and gives the benchmark a real capture path to source its sample
 audio from.
 
 ## In progress
-Nothing. Levels 0, 1 and 2 are complete on Linux; their Windows verification is
-the first task of the next session on that machine, and all three fit in one
-sitting after a single `git pull`.
+Nothing. Levels 0, 1 and 2 are complete on Linux and Level 3's harness is built;
+their Windows verification is the first task of the next session on that machine,
+and all four fit in one sitting after a single `git pull` — though Level 3's own
+runs are 70 minutes of it.
 
 ## Blocked
 - **Level 0's Windows half is unverified.** `uv sync` and `doctor` have not run
@@ -183,8 +222,25 @@ sitting after a single `git pull`.
   The format layer, both sources and both tools are tested here, and the
   chunk-seam failure is measured and mutation-tested (D46), but "captures 10
   minutes that plays back cleanly" is a claim about hardware and stays open.
-  It is also the input `BENCHMARK.md` needs, so **Level 3 cannot start until
-  this recording exists.**
+- **One missing recording now blocks four things at once.** The 10-minute
+  `record_loopback` capture is the single highest-value thing the Windows machine
+  can produce, and it is worth seeing the list in one place rather than spread
+  across four bullets:
+
+  | Blocked | Needs |
+  |---|---|
+  | Level 0's Windows half | `uv sync` + `doctor` — same sitting, no recording needed |
+  | Level 1's playback check | the recording, listened to |
+  | Level 2's boundary inspection | `dump_utterances --write-wav` over that recording |
+  | **Level 3's entire measurement** | that recording as `--input-wav` |
+
+  One session on the demo machine clears all four. Nothing about it is hard; it
+  has simply not happened, and it has been outstanding since session 5.
+- **Level 3 has produced no numbers, and must not appear to have.** The harness is
+  built and tested; `BENCHMARK.md`'s hardware survey and results table are
+  deliberately still empty, and none of Level 3's acceptance boxes are ticked. A
+  13.9 s generated fixture looped 20 times exercises the machinery and is not a
+  benchmark result.
 - **Three truncated lines in the assignment brief** are still unknown — see
   `PRD.md`. The scope line gates whether incoming-only is permitted. Raised
   again in session 4 and still unanswered; it is the only open item that can
@@ -215,9 +271,13 @@ sitting after a single `git pull`.
   were chosen against generated speech; the falling-edge and dip numbers that
   motivated hysteresis came from real recorded speech, but the 0.50/0.35 pair,
   the 160 ms debounce and the 128/192 ms padding all want a pass at Level 7.
-- Whether Level 3's benchmark should chunk at the *real* utterance-length
-  distribution now that a Segmenter exists, rather than the fixed 4 s D52
-  assumed. The bracket at 1.5 s that D52 proposed is still the cheap answer.
+- ~~Whether Level 3's benchmark should chunk at the *real* utterance-length
+  distribution~~ — settled in D57: it does, cut once and shared across all seven
+  rows, with D52's fixed 4 s / 1.5 s bracket kept as a check on the selected
+  configuration. Still open underneath it: the chunk distribution depends on the
+  TUNABLE VAD thresholds (D54, D55), so a retune at Level 7 moves the RTF
+  denominator. The distribution is recorded in `results.json` so that comparison
+  is possible rather than guesswork.
 - Whether the demo machine's loopback endpoint negotiates `paInt16` or falls
   back to `paFloat32`, and what `defaultSampleRate` it reports. Both paths are
   built and both feed the same formatter (D49), so this is a fact to record on
