@@ -156,14 +156,14 @@ formality:**
 
 ```
 git pull
-uv sync                                                  # Level 0, still owed
-python -m speech_translator.doctor                       # Level 0, still owed
-python -m speech_translator.tools.list_devices           # Level 1
-python -m speech_translator.tools.record_loopback -t 600 # Level 1 + BENCHMARK input
-python -m speech_translator.tools.dump_utterances \
-    --input-wav <that recording> --write-wav utts/       # Level 2, the open box
-python -m speech_translator.tools.benchmark \
-    --input-wav <that recording>                         # Level 3, ~70 minutes
+uv sync                                                         # Level 0, still owed
+uv run python -m speech_translator.doctor                       # Level 0, still owed
+uv run python -m speech_translator.tools.list_devices           # Level 1
+uv run python -m speech_translator.tools.record_loopback -t 600 # Level 1 + BENCHMARK input
+uv run python -m speech_translator.tools.dump_utterances \
+    --input-wav <that recording> --write-wav utts/              # Level 2, the open box
+uv run python -m speech_translator.tools.benchmark \
+    --input-wav <that recording>                                # Level 3, ~70 minutes
 ```
 
 Pre-download the Whisper weights before the timed run, or the first

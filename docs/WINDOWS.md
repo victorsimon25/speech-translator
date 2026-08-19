@@ -12,61 +12,94 @@ to *do* on this machine and what to write down afterwards.
 
 ## The prompt
 
-Paste this into Claude Code on the Windows machine, in the repo root.
+Paste this into **Antigravity** on the Windows machine, with the repo open.
+`GEMINI.md` at the repo root should load automatically and carries the project's
+hard rules; if your setup reads `AGENTS.md` instead, copy `GEMINI.md` to that
+name before starting.
 
 ```text
-New session on the speech translator, running on the WINDOWS demo machine for
-the first time. Branch `build`. CLAUDE.md loads automatically.
+You are working on the speech translator repo, on the WINDOWS demo machine
+(GTX 1650 Ti, 4 GB), for the first time. Branch `build`. The code is already
+written and tested on Linux — this session takes MEASUREMENTS, it does not
+build features.
 
-Read, in this order, before doing anything:
-  1. docs/WINDOWS.md   — the runbook for this session. You are executing it.
-  2. docs/STATE.md     — where the project is, and what this machine owes it.
-  3. docs/PLAN.md      — Levels 0-3 acceptance criteria; these are the boxes
+Read, in this order, before running anything:
+  1. GEMINI.md         — project rules. Loaded automatically; re-read it.
+  2. docs/WINDOWS.md   — the runbook for this session. You are executing it,
+                         step by step, in order. Do not improvise a different
+                         sequence.
+  3. docs/STATE.md     — where the project is and what this machine owes it.
+  4. docs/PLAN.md      — Levels 0-3 acceptance criteria. These are the boxes
                          this session can finally tick.
-  4. docs/BENCHMARK.md — the spec Level 3 executes. The harness
-                         (speech_translator/tools/benchmark.py) exists to run
-                         this document; do not reimplement any of it.
-  5. docs/DECISIONS.md — D18, D19, D20, D25, D26, D36, D41, D43, D51, D52 and
+  5. docs/BENCHMARK.md — the spec Level 3 executes. The harness at
+                         speech_translator/tools/benchmark.py already
+                         implements all of it. Do not reimplement, wrap or
+                         "improve" it.
+  6. docs/DECISIONS.md — D18, D19, D20, D25, D26, D36, D41, D43, D51, D52 and
                          D57-D59 bind this session. Do not re-litigate them.
 
-Task: execute docs/WINDOWS.md end to end. In order: verify Level 0 (`uv sync`,
-`doctor`), close Level 1 (list_devices, a 10-minute record_loopback capture),
-close Level 2 (dump_utterances --write-wav over that capture), then run Level 3
-(the benchmark: 7 configurations x 10 wall-clock minutes, ~70 minutes plus
-model downloads). Then transcribe the results and update the docs listed in
+TASK — four phases, in this order, from docs/WINDOWS.md:
+  Phase 0  verify Level 0:  git pull, uv sync, doctor
+  Phase 1  close Level 1:   list_devices, then a 10-minute record_loopback
+                            capture while I play a Spanish podcast
+  Phase 2  close Level 2:   dump_utterances --write-wav over that capture
+  Phase 3  run Level 3:     pre-download weights, browser open, the benchmark
+                            (7 configurations x 10 wall-clock minutes, ~75 min)
+Then transcribe the results and update the docs listed at the end of
 docs/WINDOWS.md.
 
-Rules I do not want re-derived or worked around:
-- Everything is a MEASUREMENT. Report what the machine says, including when it
-  is bad news. Never estimate, never fill a cell you did not observe, never tick
-  an acceptance box you did not earn. A documented negative result is worth more
-  than an assumption that happened to hold.
+Stop and check in with me at the end of each phase. I am sitting at the
+machine.
+
+HOW TO WORK HERE:
+- Ask before starting anything long. Phase 3 is ~6-7 GB of downloads and ~75
+  minutes of continuous GPU work. Tell me what you need from me first.
+- Never kill a long-running command to see how it is going. The benchmark
+  writes results.json, results.md, chunks-*.jsonl and gpu.jsonl incrementally
+  into var/benchmark/<timestamp>/ — read those while it runs.
+- Do not run configurations in parallel or spawn a second agent to speed this
+  up. Everything is competing for one 4 GB card; two at once measures neither.
+- Use `uv run python -m ...` in PowerShell so the project venv is used.
+- Keep the raw terminal output. It is the evidence the journey doc needs,
+  especially for anything that failed.
+
+RULES I DO NOT WANT RE-DERIVED OR WORKED AROUND:
+- Everything here is a MEASUREMENT. Report what the machine says, including
+  when it is bad news. Never estimate a number, never fill a results cell you
+  did not observe, never tick an acceptance box you did not earn. A documented
+  negative result is worth more than an assumption that happened to hold.
 - The benchmark harness reports; it does not choose. Selecting the model is a
   human judgement — "the fastest that is accurate enough" (D25/D26) — and
   "enough" is decided by LISTENING to the sample transcripts in results.json,
-  not by reading the RTF column. Ask me before writing the choice into config.
+  not by reading the RTF column. Ask me before writing any choice into config.
 - A configuration that OOMs is a failed row and the matrix continues. Do not
-  restart the whole matrix because row 3 died (D51).
+  restart the matrix from the top because row 3 died (D51).
 - No CPU fallback exists and none is to be built (D36). If
-  ctranslate2.get_cuda_device_count() is not 1, STOP and diagnose — do not pass
-  --device cpu to make it run. A CPU run produces seven rows of fiction.
+  ctranslate2.get_cuda_device_count() is not 1, STOP and diagnose — do NOT
+  pass --device cpu to make it run. A CPU run produces seven rows of fiction.
 - Do not add dependencies, do not pip install anything, do not edit
-  pyproject.toml or uv.lock (D39). If something is missing, say so.
-- Two things must be listened to, not just run: the recording (Level 1) and the
-  per-utterance WAVs in utts/ (Level 2). Tell me when it is time and I will
-  listen.
-- There are three unknowns to record as facts on the first run: whether uv sync
-  agrees with the committed lockfile, what defaultSampleRate the loopback
-  endpoint reports, and whether it negotiates paInt16 or falls back to
-  paFloat32 (D49).
+  pyproject.toml or uv.lock (D39). If something is missing, tell me.
+- Two acceptance criteria need my ears, not a tool: "the recording plays back
+  cleanly" (Level 1) and "boundaries land at real pauses" (Level 2). Stop and
+  ask me to listen. Do not substitute a waveform or spectrum check for that.
+- Three unknowns to record as facts on this first run: whether uv sync agrees
+  with the committed lockfile, what defaultSampleRate the loopback endpoint
+  reports, and whether it negotiates paInt16 or falls back to paFloat32 (D49).
 
-I will be at the machine. Ask me before anything long-running starts, and tell
-me what you need me to do (play audio, open a browser, listen to a file).
+MOST LIKELY TO GO WRONG: the cuDNN/cuBLAS DLL trap (D43). It surfaces as
+`import ctranslate2` failing with a bare "DLL load failed", which points at
+CTranslate2 rather than at the missing cuDNN. docs/WINDOWS.md has the
+diagnosis. Do not hand-copy DLLs — that is the unreproducible fix D41
+rejected. Run `doctor` early so this shows up before, not during, the 75-minute
+matrix.
 
-Finish by updating docs/BENCHMARK.md (survey + results table + the plain
-statements it asks for), docs/PLAN.md, docs/STATE.md, docs/DECISIONS.md if the
-method changed, and docs/journey/08-*.md — the journey doc is a graded
-deliverable. Then commit and push to `build`.
+FINISH BY updating docs/BENCHMARK.md (hardware survey, results table, and the
+four plain statements it asks for), speech_translator/config.py (the selected
+model_size and compute_type, once I have agreed the choice), docs/PLAN.md
+(tick what was earned, with evidence notes), docs/STATE.md, docs/DECISIONS.md
+if the method changed, and docs/journey/08-*.md — the journey doc is a graded
+deliverable and wants the raw numbers, the throttling curve, and whatever went
+wrong. Then commit and push to `build`.
 ```
 
 ---
@@ -94,7 +127,7 @@ sitting, but Levels 0–2 must precede Level 3.
 ```powershell
 git pull
 uv sync
-python -m speech_translator.doctor
+uv run python -m speech_translator.doctor
 ```
 
 `doctor` runs 14 checks. **On this machine, healthy looks like:** no red lines
@@ -134,7 +167,7 @@ against the 500 000/month free tier (D31), so this is worth doing first.
 ## Step 1 — Level 1: the capture
 
 ```powershell
-python -m speech_translator.tools.list_devices
+uv run python -m speech_translator.tools.list_devices
 ```
 
 **Record:** the endpoint name, index, `defaultSampleRate` and channel count.
@@ -146,7 +179,7 @@ what `BENCHMARK.md` step 2 suggests. Meeting-like, not studio-clean: room tone
 and a music bed are what Silero is in the design to survive (D23).
 
 ```powershell
-python -m speech_translator.tools.record_loopback -t 600
+uv run python -m speech_translator.tools.record_loopback -t 600
 ```
 
 Writes `var/recordings/loopback-<timestamp>.wav`, 16 kHz mono int16 — the
@@ -168,7 +201,7 @@ never been opened.
 ## Step 2 — Level 2: the boundaries
 
 ```powershell
-python -m speech_translator.tools.dump_utterances --input-wav var\recordings\loopback-<timestamp>.wav --write-wav utts\
+uv run python -m speech_translator.tools.dump_utterances --input-wav var\recordings\loopback-<timestamp>.wav --write-wav utts\
 ```
 
 **Then listen to the files in `utts\`.** Do the cuts land at real pauses, or do
@@ -198,7 +231,7 @@ two `compute_type` variants quantise the same weights at load time, so it is
 four downloads, not seven.
 
 ```powershell
-python -c "from speech_translator.windows_cuda import add_cuda_dll_directories as a; a(); from faster_whisper.utils import download_model; [download_model(m, cache_dir='models') for m in ('small','medium','large-v3-turbo','large-v3')]"
+uv run python -c "from speech_translator.windows_cuda import add_cuda_dll_directories as a; a(); from faster_whisper.utils import download_model; [download_model(m, cache_dir='models') for m in ('small','medium','large-v3-turbo','large-v3')]"
 ```
 
 About 6–7 GB. `models/` is gitignored and is the cache directory `config.py`
@@ -214,7 +247,7 @@ for the whole run.
 ### 3c. Run it
 
 ```powershell
-python -m speech_translator.tools.benchmark --input-wav var\recordings\loopback-<timestamp>.wav --language es
+uv run python -m speech_translator.tools.benchmark --input-wav var\recordings\loopback-<timestamp>.wav --language es
 ```
 
 Defaults are the ones `BENCHMARK.md` specifies: the seven configurations, 10
@@ -252,8 +285,8 @@ Once a row looks like the winner, re-run just that one at fixed chunk lengths �
 D52's bracket, kept alive by D57:
 
 ```powershell
-python -m speech_translator.tools.benchmark --input-wav <same wav> --language es --configs <model>:<compute_type> --chunking fixed --chunk-ms 4000
-python -m speech_translator.tools.benchmark --input-wav <same wav> --language es --configs <model>:<compute_type> --chunking fixed --chunk-ms 1500
+uv run python -m speech_translator.tools.benchmark --input-wav <same wav> --language es --configs <model>:<compute_type> --chunking fixed --chunk-ms 4000
+uv run python -m speech_translator.tools.benchmark --input-wav <same wav> --language es --configs <model>:<compute_type> --chunking fixed --chunk-ms 1500
 ```
 
 If a bracket fails a gate the headline run passes, **that is the finding** and it
