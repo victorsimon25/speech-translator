@@ -137,10 +137,10 @@ class Config:
     utterance_tail_pad_ms: int = 192
 
     # -- ASR ---------------------------------------------------------------
-    #: Decided by docs/BENCHMARK.md at Level 3 (D20). None until then, and the
-    #: transcriber must refuse to start rather than substitute a default.
-    model_size: str | None = None
-    compute_type: str | None = None
+    #: Decided by docs/BENCHMARK.md at Level 3 (D20). Selected: medium at
+    #: int8_float16 — RTF 0.488, peak VRAM 1849 MB, no throttling (D60).
+    model_size: str | None = "medium"
+    compute_type: str | None = "int8_float16"
     device: str = "cuda"  # no CPU fallback is built (D36)
     beam_size: int = 1
     condition_on_previous_text: bool = False
@@ -230,8 +230,8 @@ def load_config() -> Config:
         vad_speaking_off_debounce_ms=_env_int("VAD_SPEAKING_OFF_DEBOUNCE_MS", 160),
         utterance_pre_roll_ms=_env_int("UTTERANCE_PRE_ROLL_MS", 128),
         utterance_tail_pad_ms=_env_int("UTTERANCE_TAIL_PAD_MS", 192),
-        model_size=_env_opt_str("MODEL_SIZE", None),
-        compute_type=_env_opt_str("COMPUTE_TYPE", None),
+        model_size=_env_opt_str("MODEL_SIZE", "medium"),
+        compute_type=_env_opt_str("COMPUTE_TYPE", "int8_float16"),
         device=_env_str("DEVICE", "cuda"),
         model_cache_dir=_env_path("MODEL_CACHE_DIR", REPO_ROOT / "models"),
         asr_queue_maxsize=_env_int("ASR_QUEUE_MAXSIZE", 4),

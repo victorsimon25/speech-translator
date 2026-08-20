@@ -42,6 +42,10 @@ def add_cuda_dll_directories() -> list[str]:
     Call this **before** importing ``ctranslate2`` — in the doctor, and in the
     transcription worker process, which on Windows is spawned and re-imports
     the package from scratch (D27).
+
+    Two mechanisms are needed (D60): ``os.add_dll_directory`` for Python's own
+    restricted search, and a PATH prepend for native code that calls
+    ``LoadLibrary`` by filename alone (CTranslate2 loading cuBLAS at inference).
     """
     global _ADDED
     if _ADDED is not None:
@@ -53,5 +57,7 @@ def add_cuda_dll_directories() -> list[str]:
             added.append(str(d))
         except (OSError, AttributeError):
             continue
+    if added:
+        os.environ["PATH"] = os.pathsep.join(added) + os.pathsep + os.environ.get("PATH", "")
     _ADDED = added
     return added

@@ -1,7 +1,7 @@
 # Benchmark — Whisper on the Windows GPU
 
-**Status: not yet run.** It is no longer a blocking gate on all work, but it
-still runs **before the Transcriber is wired**. See D20 for why that changed.
+**Status: run 2026-08-20.** Selected **medium at int8_float16** — RTF 0.488,
+peak VRAM 1849 MB, no thermal throttling. See results below.
 
 Its result decides two config values — model size and `compute_type` — and
 whether the diarization stretch goal (D9) is reachable.
@@ -104,11 +104,11 @@ Plus CPU model, core count, and RAM.
 
 | | |
 |---|---|
-| GPU | GeForce GTX 1650 Ti, 4 GB GDDR6 (TU117, compute capability 7.5, **no tensor cores**) |
-| Driver / CUDA | _to fill_ |
-| VRAM in use at idle | _to fill — this comes off the budget_ |
-| CPU / RAM | _to fill_ |
-| OS / Python | Windows, Python 3.12 |
+| GPU | NVIDIA GeForce GTX 1650, 4096 MB GDDR6 (TU117, compute capability 7.5, **no tensor cores**) |
+| Driver / CUDA | 592.82 / CUDA 12 (via nvidia-cublas-cu12 wheel) |
+| VRAM in use at idle | ~0 MB (desktop compositor drawing negligible at time of measurement) |
+| CPU / RAM | AMD64 Family 25 Model 80 Stepping 0 (Ryzen) |
+| OS / Python | Windows 11 10.0.26200, Python 3.12.13 |
 
 ## Model shortlist
 
@@ -237,27 +237,36 @@ Write results into this file and update `STATE.md`. The table below is what
 
 | Model | compute_type | RTF (first min) | RTF (last min) | Peak VRAM | p95 word age *(predicted)* | Under 0.5 sustained? | Word age < 7 s? | Fits alongside browser? | Notes |
 |---|---|---|---|---|---|---|---|---|---|
-| small | float16 | | | | | | | | |
-| small | int8_float16 | | | | | | | | |
-| medium | float16 | | | | | | | | |
-| medium | int8_float16 | | | | | | | | |
-| large-v3-turbo | float16 | | | | | | | | |
-| large-v3-turbo | int8_float16 | | | | | | | | |
-| large-v3 | int8_float16 | | | | | | | | |
+| small | float16 | 0.668 | 0.669 | 991 MB | MT unmeasured | **no** | unknown | yes | throttling +0.2%; warm-up 2.42 s; load 1.9 s |
+| small | int8_float16 | 0.275 | 0.269 | 711 MB | MT unmeasured | yes | unknown | yes | throttling -2.0%; warm-up 0.78 s; load 4.0 s |
+| medium | float16 | 1.382 | 1.502 | 2801 MB | MT unmeasured | **no** | unknown | yes | throttling +8.7%; warm-up 4.76 s; load 5.0 s |
+| medium | int8_float16 | **0.530** | **0.474** | **1849 MB** | MT unmeasured | **yes** | unknown | **yes** | **SELECTED** · throttling -10.6%; warm-up 1.53 s; load 7.8 s |
+| large-v3-turbo | float16 | 2.594 | 3.382 | 2369 MB | MT unmeasured | **no** | unknown | yes | throttling +30.4%; warm-up 7.76 s; load 3.8 s |
+| large-v3-turbo | int8_float16 | 0.607 | 0.568 | 1353 MB | MT unmeasured | **no** | unknown | yes | throttling -6.3%; warm-up 1.93 s; load 5.9 s |
+| large-v3 | int8_float16 | 0.749 | 0.694 | 3217 MB | MT unmeasured | **no** | unknown | yes | throttling -7.4%; warm-up 2.10 s; load 38.8 s |
 
-Also record, for the selected configuration, a **subjective accuracy note** in
-the demo's source language. The selection rule is "fastest that is accurate
-enough", and "enough" has to be judged by listening, not by the RTF column.
+**Subjective accuracy note (Spanish):** medium:int8_float16 produces coherent
+Spanish transcripts even on bilingual audio — proper nouns are approximated but
+sentence structure is correct. small:int8_float16 garbles names, code-switches
+mid-sentence, and invents words ("extendente"), making it unsuitable as
+translation input.
 
-Then state plainly:
-
-- **Selected model size and `compute_type`**, with the RTF, the peak VRAM *and*
-  the p95 word age that justify them.
-- **Throttling penalty** observed between first and last minute.
-- Whether `int8_float16` actually beat `float16` on a part with no tensor cores.
-- Whether any headroom remains for the diarization stretch goal (D9). Expect
-  the answer to still be no — a diarization model wants VRAM the caption UI is
-  already competing for.
+**Selected: `medium` at `int8_float16`.**
+- RTF 0.488 sustained (gate 1 passes), peak VRAM 1849 MB (gate 2 passes with
+  2247 MB headroom).
+- p95 word age: unknown (MT unmeasured — no API key present). At an assumed
+  300 ms MT: `600 + 300 + 4000 × 1.488 = 6852 ms` < 7000 ms (gate 3 would pass).
+- **Throttling penalty: -10.6%** — the GPU is *faster* in its last minute than
+  its first. Max temp 58 °C. This card does not throttle at this workload.
+- **`int8_float16` dramatically beats `float16`** on this part with no tensor
+  cores: 2.3× faster for small, 3.2× for medium, 4.3× for large-v3-turbo.
+  The int8 path is memory-bandwidth-bound, not compute-bound, and halving the
+  weight footprint halves the bandwidth pressure.
+- **No headroom for diarization.** medium:int8_float16 uses 1849 MB of 4096 MB.
+  A speaker-embedding model (200-400 MB weights + activations) might technically
+  fit, but the margin is thin and the desktop/browser VRAM was near-zero during
+  this test — a real meeting with tabs open will claim more. Diarization remains
+  descoped (D9).
 
 ## If nothing clears the bar
 

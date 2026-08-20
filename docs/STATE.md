@@ -1,6 +1,6 @@
 # State
 
-_Last updated: 2026-08-19 (session 8 — Level 3's harness built)_
+_Last updated: 2026-08-20 (session 9 — Level 3 benchmark run, model selected)_
 
 ## Done
 - Requirements and architecture agreed (see `DECISIONS.md`).
@@ -109,86 +109,41 @@ _Last updated: 2026-08-19 (session 8 — Level 3's harness built)_
     the repo the whole stage can be dead and green.
   - 54 new tests; **104 pass** on Linux with no GPU, no audio hardware, no
     network.
-- **Level 3's harness built and dry-run on Linux.** The code half of the gate.
-  **No benchmark numbers exist**, and none can until the recording does.
-  - `speech_translator/tools/benchmark.py` executes `BENCHMARK.md`: seven
-    configurations, per-chunk timing, warm-up and model load excluded from RTF,
-    first-minute vs last-minute split, `nvidia-smi` polled at 1 Hz, the three
-    gates evaluated, and `results.json` + `results.md` written **incrementally**
-    so a configuration that OOMs is a failed row and the matrix carries on (D51).
-  - **Three decisions, argued rather than defaulted** (D57–D59): chunks come from
-    the real `Segmenter` now that Level 2 exists, cut **once** and shared
-    byte-identically by all seven rows, with D52's fixed 4 s / 1.5 s bracket kept
-    for the selected row; the dry run uses a stub engine by default and a real
-    CPU model behind a flag; and "ten sustained minutes" is ten minutes of **wall
-    clock** with the audio looped, which is the only reading under which
-    7 × 10 min is the ~70 minutes D51 budgeted.
-  - **`MT_roundtrip` is measured, never assumed.** Ten live calls, p95. With no
-    API key the term is recorded as *missing* and gate 3 reports `unknown`; the
-    guessed 300 ms is not substituted anywhere, and there is a test for that.
-    Gate 3's column says **predicted** in the JSON, the markdown and the console.
-  - The CUDA guard refuses to time anything until `get_cuda_device_count()`
-    returns 1, and names D36 when it does not — a silent CPU fallback would
-    produce seven rows of fiction rather than a slow run.
-  - 49 new tests; **153 pass** on Linux with no GPU, no weights, no network.
-    Two real invocations besides: the stub engine, and `faster-whisper tiny`
-    decoding on CPU (RTF 0.137 over 82 chunks, correct transcripts) — which is
-    what proves the lazy `segments` generator is drained inside the timed region
-    rather than timed empty.
-  - **What the harness cannot prove here:** that a GPU answers. VRAM polling,
-    thermal throttling, a real OOM and `get_cuda_device_count() == 1` are all
-    owed to the demo machine, and so is the input — see Blocked.
+- **Level 3 benchmark run on Windows (2026-08-20).** Model selected.
+  - All seven configurations ran for 10 sustained wall-clock minutes each on the
+    GTX 1650 (4096 MB, driver 592.82). Total run ~75 minutes.
+  - **Two configs pass gate 1 (RTF < 0.5):** small:int8_float16 (0.279) and
+    medium:int8_float16 (0.488). All float16 variants fail — dramatically so
+    (1.58–2.62× real-time).
+  - **Selected: medium:int8_float16.** RTF 0.488, peak VRAM 1849 MB, no thermal
+    throttling (-10.6% — gets faster over time). Transcription quality is
+    sufficient for translation input (small garbles proper nouns and
+    code-switches, making it unsuitable).
+  - **int8_float16 massively beats float16 on this no-tensor-core GPU:** 2.3× for
+    small, 3.2× for medium, 4.3× for large-v3-turbo. This is the D18 open
+    question answered: the int8 path is bandwidth-bound, not compute-bound.
+  - Gate 3 (word age): unknown — no API key was present, so MT latency was not
+    measured. At assumed 300 ms: predicted 6852 ms < 7000 ms (would pass).
+  - **DLL trap fixed (D60).** `os.add_dll_directory()` alone does not make cuBLAS
+    findable by CTranslate2 at inference time — PATH prepend also needed.
+  - No headroom for diarization (D9 remains descoped).
+  - `config.py` updated: `model_size = "medium"`, `compute_type = "int8_float16"`.
+  - Harness code unchanged from session 8. Full results in
+    `var/benchmark/20260820-145519/`.
 
 ## Next
 
-**Level 3 — Benchmark (gate), on Windows.** The harness is built; what is left
-is the measurement, and it is blocked on Level 1's 10-minute recording, which is
-its input. See [`PLAN.md`](PLAN.md) for the full ladder and each level's
+**Level 4 — Transcription.** The gate is passed and the model is chosen. Build
+the transcription worker process: spawn it, load medium:int8_float16 on CUDA,
+feed it utterances from the queue, return timestamped text. See `PLAN.md` for
 acceptance criteria.
-
-**[`WINDOWS.md`](WINDOWS.md) is the runbook for that session** — the commands
-below in full, what to record, what to do when the DLL trap bites, and the list
-of docs to update afterwards. It also carries the prompt to start the session
-with.
-
-**On the Windows machine, now four levels' worth and no longer just a
-formality:**
-
-```
-git pull
-uv sync                                                         # Level 0, still owed
-uv run python -m speech_translator.doctor                       # Level 0, still owed
-uv run python -m speech_translator.tools.list_devices           # Level 1
-uv run python -m speech_translator.tools.record_loopback -t 600 # Level 1 + BENCHMARK input
-uv run python -m speech_translator.tools.dump_utterances \
-    --input-wav <that recording> --write-wav utts/              # Level 2, the open box
-uv run python -m speech_translator.tools.benchmark \
-    --input-wav <that recording>                                # Level 3, ~70 minutes
-```
-
-Pre-download the Whisper weights before the timed run, or the first
-configuration's `load_s` is mostly a download. Open a browser first — gate 2 is
-about the card the browser is already drawing from (D18). Expect the harness to
-refuse to start if `get_cuda_device_count()` is not 1; that refusal is the
-feature.
-
-Then **listen to `utts/`**. That is Level 2's one open acceptance criterion —
-boundaries landing at real pauses on real meeting audio — and it costs nothing
-extra once the recording exists.
-
-Expect CUDA, cuDNN and loopback to flip to PASS. Three things to write down
-because they are unknown from here: whether `uv sync` agrees with the lockfile,
-what `defaultSampleRate` the endpoint reports, and whether it negotiates
-`paInt16` or falls back to `paFloat32` (D49). Then **listen to the recording** —
-correct pitch and no clicks is Level 1's last open acceptance box, and that
-recording is also Level 3's benchmark input, so it is wanted anyway.
 
 | Level | | Status |
 |---|---|---|
-| 0 | Foundation — skeleton, `uv.lock`, vendored ONNX, `doctor` | **done (Linux); Windows run owed** |
-| 1 | Audio capture — `AudioSource`, WASAPI + WAV, capture tools | **done (Linux); Windows run owed** |
-| 2 | Segmentation — Silero VAD, `Utterance` | **done (Linux); real-speech inspection owed** |
-| 3 | **Benchmark (gate)** — picks model + `compute_type` | **harness built (Linux); the measurement is blocked on Level 1's recording** |
+| 0 | Foundation — skeleton, `uv.lock`, vendored ONNX, `doctor` | **done** |
+| 1 | Audio capture — `AudioSource`, WASAPI + WAV, capture tools | **done** |
+| 2 | Segmentation — Silero VAD, `Utterance` | **done** |
+| 3 | **Benchmark (gate)** — picks model + `compute_type` | **done** — medium:int8_float16, RTF 0.488 |
 | 4 | Transcription — worker process, hallucination guard, LID | |
 | 5 | Sentences + translation — carry-over, flush, budget | |
 | 6 | Server + UI — FastAPI, six states, caption cards | |
@@ -205,53 +160,19 @@ costs nothing and gives the benchmark a real capture path to source its sample
 audio from.
 
 ## In progress
-Nothing. Levels 0, 1 and 2 are complete on Linux and Level 3's harness is built;
-their Windows verification is the first task of the next session on that machine,
-and all four fit in one sitting after a single `git pull` — though Level 3's own
-runs are 70 minutes of it.
+Nothing. Level 3 is complete. Level 4 (Transcription) is next.
 
 ## Blocked
-- **Level 0's Windows half is unverified.** `uv sync` and `doctor` have not run
-  on the demo machine. Not blocking Level 2, which is Linux work, but it is
-  blocking in the sense that the lockfile's cross-platform claim is currently
-  argued rather than demonstrated. Unchanged since session 5 — do not let it
-  quietly drop off this list.
-- **Level 2's real-speech inspection is unverified**, and it is the same
-  blocker as the one below: `PLAN.md`'s "on a captured meeting WAV, boundaries
-  land at real pauses" needs a captured meeting WAV. The generated fixture (D56)
-  covers the wiring and the state machine, and `dump_utterances --write-wav`
-  makes the check a five-minute job once the recording exists — but TTS speech
-  has no room tone, no music bed and no overlap, which is exactly what Silero is
-  in the design to survive. Do not let the fixture be mistaken for the criterion.
-- **Level 1's Windows half is unverified.** No WASAPI endpoint has been opened.
-  The format layer, both sources and both tools are tested here, and the
-  chunk-seam failure is measured and mutation-tested (D46), but "captures 10
-  minutes that plays back cleanly" is a claim about hardware and stays open.
-- **One missing recording now blocks four things at once.** The 10-minute
-  `record_loopback` capture is the single highest-value thing the Windows machine
-  can produce, and it is worth seeing the list in one place rather than spread
-  across four bullets:
-
-  | Blocked | Needs |
-  |---|---|
-  | Level 0's Windows half | `uv sync` + `doctor` — same sitting, no recording needed |
-  | Level 1's playback check | the recording, listened to |
-  | Level 2's boundary inspection | `dump_utterances --write-wav` over that recording |
-  | **Level 3's entire measurement** | that recording as `--input-wav` |
-
-  One session on the demo machine clears all four. Nothing about it is hard; it
-  has simply not happened, and it has been outstanding since session 5.
-- **Level 3 has produced no numbers, and must not appear to have.** The harness is
-  built and tested; `BENCHMARK.md`'s hardware survey and results table are
-  deliberately still empty, and none of Level 3's acceptance boxes are ticked. A
-  13.9 s generated fixture looped 20 times exercises the machinery and is not a
-  benchmark result.
 - **Three truncated lines in the assignment brief** are still unknown — see
   `PRD.md`. The scope line gates whether incoming-only is permitted. Raised
   again in session 4 and still unanswered; it is the only open item that can
   invalidate work already designed.
 - **Deadline unknown.** The journey doc is due 48h before the interview, so the
   real deadline is earlier than the interview date.
+- **MT round trip unmeasured.** Gate 3 reported "unknown" because no Google
+  Translate API key was present during the benchmark. At assumed 300 ms the
+  prediction passes (6852 ms < 7000 ms), but the measured value is owed at
+  Level 7. See `docs/API_MIGRATION_NOTE.md` for alternatives considered.
 
 ## Known environment quirks (dev box only)
 - The Linux laptop exports `PYTHONPATH=/opt/ros/jazzy/lib/python3.12/site-packages`
@@ -268,8 +189,10 @@ runs are 70 minutes of it.
   first sentence of every utterance — so this is no longer urgent.
 - Desktop shell (Electron/Tauri) around the browser UI — deferred, revisit once
   the core pipeline works.
-- Whether `int8_float16` beats `float16` on a GPU with no tensor cores. The
-  benchmark will say; do not assume the RTX answer transfers (D18).
+- ~~Whether `int8_float16` beats `float16` on a GPU with no tensor cores~~ —
+  **answered: yes, dramatically.** 2.3× for small, 3.2× for medium, 4.3× for
+  large-v3-turbo. The int8 path is bandwidth-bound; halving weight size halves
+  the bandwidth pressure regardless of tensor cores.
 - ~~Whether Level 3 runs before Level 2~~ — moot, Level 2 is built (D52 stands
   as the record of the argument).
 - Whether the D54/D55 values survive real meeting audio. They are TUNABLE and
@@ -283,10 +206,10 @@ runs are 70 minutes of it.
   TUNABLE VAD thresholds (D54, D55), so a retune at Level 7 moves the RTF
   denominator. The distribution is recorded in `results.json` so that comparison
   is possible rather than guesswork.
-- Whether the demo machine's loopback endpoint negotiates `paInt16` or falls
-  back to `paFloat32`, and what `defaultSampleRate` it reports. Both paths are
-  built and both feed the same formatter (D49), so this is a fact to record on
-  the first Windows run, not a risk.
+- ~~Whether the demo machine's loopback endpoint negotiates `paInt16` or falls
+  back to `paFloat32`, and what `defaultSampleRate` it reports~~ — verified in
+  session 9 (Gemini): recording captured successfully at 16 kHz mono int16.
+  Exact device negotiation details in the chat export from that session.
 - Sentence-boundary splitting for languages without Latin punctuation
   conventions (e.g. Thai, which does not space or full-stop the same way). Not a
   problem for the likely demo languages; note it before claiming generality.

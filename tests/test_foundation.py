@@ -48,11 +48,11 @@ def test_d25_values_are_the_derived_ones(key, value):
     assert getattr(cfg.Config(), key) == value
 
 
-def test_model_choice_is_deferred_to_the_benchmark():
-    """D20: Level 3 decides these. A default here would be a guess."""
+def test_model_choice_decided_by_benchmark():
+    """D20/D60: Level 3 measured and selected medium:int8_float16."""
     c = cfg.Config()
-    assert c.model_size is None
-    assert c.compute_type is None
+    assert c.model_size == "medium"
+    assert c.compute_type == "int8_float16"
 
 
 def test_config_satisfies_the_word_age_target():

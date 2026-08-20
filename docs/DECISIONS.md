@@ -1129,3 +1129,35 @@ this overstates thermal load. That is the direction to be conservative in for a
 gate whose whole purpose is to catch a machine that flatters itself when cold,
 and the alternative — pacing chunks at wall-clock speed — would spend ten minutes
 to collect three minutes of GPU time.
+
+---
+
+## 2026-08-20 — Session 9 (fixing the DLL trap for Level 3)
+
+### D60. `os.add_dll_directory` is necessary but not sufficient; PATH is also needed
+D43 recorded that `windows_cuda.add_cuda_dll_directories()` calls
+`os.add_dll_directory()` for each nvidia wheel `bin` directory so that
+`import ctranslate2` can find the cuBLAS/cuDNN DLLs. This passes `doctor`, and
+it passes `get_cuda_device_count()`. But **inference fails** with
+`RuntimeError: Library cublas64_12.dll is not found or cannot be loaded`.
+
+The reason: `os.add_dll_directory()` extends the search path used by Python's
+own extension-module loader (which sets `LOAD_LIBRARY_SEARCH_DEFAULT_DIRS`). But
+CTranslate2's native code loads cuBLAS internally via `LoadLibrary("cublas64_12.dll")`
+with just the bare filename — which falls back to the *standard* Windows DLL
+search order: application directory, system32, Windows, current directory, then
+**PATH**. Directories registered with `os.add_dll_directory()` are not in that
+standard order.
+
+Proven on the demo machine: five benchmark runs on 2026-08-19, all failing at the
+`transcribe` stage (not at import, not at model load) with the same cuBLAS error.
+The CUDA guard passed (`get_cuda_device_count() == 1`), the model loaded
+(`load_s: 3.605`), but the first matrix multiplication died.
+
+**Fix:** `add_cuda_dll_directories()` now also prepends the directories to
+`os.environ["PATH"]`. Both mechanisms stay — `os.add_dll_directory` for Python's
+restricted loader, PATH for native `LoadLibrary`. The function remains idempotent
+(repeated calls return the cached list and the PATH is modified only once).
+
+No-op on Linux (the directory list is empty). No behaviour change to `doctor` — it
+was already loading DLLs by absolute path, so it passed before and still passes.

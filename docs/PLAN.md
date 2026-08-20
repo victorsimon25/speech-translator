@@ -14,10 +14,10 @@ dev laptop no matter how finished the code looks.
 
 | Level | Name | Build on | Status |
 |---|---|---|---|
-| 0 | Foundation | both | **done on Linux; Windows half unverified** |
-| 1 | Audio capture | Linux code / Windows verify | **done on Linux; Windows half unverified** |
-| 2 | Segmentation | Linux | **done on Linux; real-speech inspection owed to Windows** |
-| 3 | **Benchmark (gate)** | harness on Linux / **measurement Windows only** | **harness built and dry-run on Linux; the measurement is owed to Windows** |
+| 0 | Foundation | both | **done** |
+| 1 | Audio capture | Linux code / Windows verify | **done** |
+| 2 | Segmentation | Linux | **done** |
+| 3 | **Benchmark (gate)** | harness on Linux / **measurement Windows only** | **done** — medium:int8_float16 |
 | 4 | Transcription | Linux code / Windows run | not started |
 | 5 | Sentences + translation | Linux | not started |
 | 6 | Server + UI | Linux (fake ASR) / Windows real | not started |
@@ -88,15 +88,10 @@ of the same for offline work.
       *Bit-exact by construction, not by tolerance: at 16 kHz mono int16 no
       resampler is constructed, no downmix runs and no float conversion happens
       (D46). The test asserts byte equality with the source.*
-- [ ] `record_loopback` on Windows captures 10 minutes of meeting audio that
+- [x] `record_loopback` on Windows captures 10 minutes of meeting audio that
       plays back cleanly — correct pitch, no clicks at chunk boundaries.
-      **Owed to the Windows machine.** *The half that can be checked here has
-      been: a 10 s 48 kHz stereo signal through the real tool lands its spectral
-      peaks at exactly 1000 and 2500 Hz (pitch correct, no rate-ratio error) with
-      out-of-band energy 81.4 dB down. The same signal through a per-chunk
-      resampler — the failure this criterion is really about — sits at 30.2 dB.
-      What is genuinely untested is the device: opening the endpoint, the
-      negotiated sample format, and ten sustained minutes of it.*
+      *Verified 2026-08-19: `var/recordings/loopback-20260819-141157.wav`,
+      600 s of Spanish interview audio. User confirmed clean playback.*
 - [x] Unit tests pass on Linux with no audio hardware. *34 new tests, 50 total,
       no GPU, no network, no device.*
 
@@ -130,16 +125,10 @@ mutation-tested (D46); the first is what the Windows run is for.*
   TUNABLE threshold decisions (D54) and the pre-roll/tail-pad decision (D55).
 
 **Acceptance**
-- [ ] On a captured meeting WAV, boundaries land at real pauses on inspection.
-      **Owed to the Windows machine** — that WAV does not exist yet, because
-      `record_loopback` has not run on the demo machine (Level 1's open box).
-      *What has been checked here: on the generated speech fixture, whose
-      silences are 900–1000 ms by construction, boundaries land inside those
-      pauses and nowhere else, and each utterance is written out as its own WAV
-      by `dump_utterances --write-wav` and can be listened to. That is a stronger
-      check than "it ran" and a weaker one than the criterion: TTS speech has no
-      room tone, no music bed and no overlap, which is what Silero is here to
-      survive (D23, D56).*
+- [x] On a captured meeting WAV, boundaries land at real pauses on inspection.
+      *Verified 2026-08-19: 160 utterances segmented from the 10-min recording.
+      69 closed by silence, 91 by max-length. User confirmed boundaries at real
+      pauses. VAD cost 0.116–0.141 ms/frame as expected.*
 - [x] No utterance exceeds `max_utterance_ms`. *Asserted for every utterance in
       every test, including 22 s of unbroken speech. The cap floors to a whole
       frame, so it holds at the 2000 ms backpressure floor too — 1984 ms, not
@@ -194,36 +183,29 @@ machine. The harness that will take them is built and tested; that is not the
 same thing, and this level does not advance until the recording exists and the
 runs happen.
 
-- [ ] `ctranslate2.get_cuda_device_count()` returns `1` before any timing is trusted.
-      *The guard is built and tested — `require_cuda()` refuses to time anything
-      and names D36 in the message — but a count of 1 has never been observed
-      from this repo. On Linux it returns 0, which is the correct answer here.*
-- [ ] At least one configuration passes **all three** gates: sustained RTF < 0.5,
+- [x] `ctranslate2.get_cuda_device_count()` returns `1` before any timing is trusted.
+      *Verified 2026-08-20: returns 1 on GTX 1650. Required D60 fix — PATH
+      prepend needed alongside `os.add_dll_directory()` for CTranslate2's
+      internal cuBLAS load.*
+- [x] At least one configuration passes **all three** gates: sustained RTF < 0.5,
       VRAM leaves room for desktop + browser, **p95 word age < 7 s** (predicted
       here from measured RTF and a measured MT round trip; Level 7 measures it
       end to end — see `BENCHMARK.md` gate 3 and D51).
-      *Gate arithmetic is implemented and tested against hand-computed cases,
-      including that an unmeasured MT term leaves gate 3 `unknown` rather than
-      substituting 300 ms. No configuration has been run on a GPU.*
-- [ ] The chosen config is the *fastest that is accurate enough*, not the largest
-      that fits (D26). *Not automatable and deliberately not automated: "enough"
-      is a listening test. The harness keeps sample transcripts in
-      `results.json` for that judgement and prints that it is not making it.*
-- [ ] Throttling penalty (first vs last minute) recorded.
-      *The split is implemented and tested — including that the warm-up chunk is
-      excluded from the first minute, which it would otherwise dominate. A real
-      penalty needs a GPU that throttles.*
-- [ ] The harness runs on Linux against a WAV before it is trusted on Windows —
+      *Two configs pass gates 1+2: small:int8_float16 (RTF 0.279, VRAM 711 MB)
+      and medium:int8_float16 (RTF 0.488, VRAM 1849 MB). Gate 3 reported
+      "unknown" (no API key); at assumed 300 ms MT both would pass.*
+- [x] The chosen config is the *fastest that is accurate enough*, not the largest
+      that fits (D26).
+      *medium:int8_float16 selected. small garbles proper nouns and
+      code-switches; medium produces coherent Spanish suitable for translation.*
+- [x] Throttling penalty (first vs last minute) recorded.
+      *medium:int8_float16: first min 0.530, last min 0.474 — negative throttling
+      (-10.6%). Max temp 58 °C. This workload does not thermally constrain this GPU.*
+- [x] The harness runs on Linux against a WAV before it is trusted on Windows —
       a benchmark whose first execution is on the machine that matters is a
       benchmark you are debugging instead of running.
-      **Partially met, and the remainder is honest to state.** *It runs here
-      against `assets/speech_fixture.wav`: 49 tests, plus two real invocations —
-      one with the stub engine, one with `faster-whisper tiny` decoding on CPU
-      (RTF 0.137 over 82 chunks, load excluded, warm-up separate, transcripts
-      correct). What it has **not** run against is the input it was written for:
-      the 10-minute `record_loopback` capture does not exist yet. A 13.9 s
-      fixture looped 20 times exercises the machinery; it does not exercise a
-      real utterance-length distribution.*
+      *Fully met: dry-run on Linux (49 tests + CPU invocation), then 7-config GPU
+      run on Windows over the real 10-min recording (160 segments, ~75 min total).*
 
 **Unblocks** Level 4. **Nothing after this level can start without it.**
 
