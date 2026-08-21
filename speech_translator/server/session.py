@@ -258,6 +258,9 @@ class SessionController:
                 pass
             self._worker = None
 
+        if self._publisher is not None:
+            self._publisher.close()
+
         self._segmenter = None
         self._splitter = None
         self._backpressure = None

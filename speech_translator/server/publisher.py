@@ -11,8 +11,10 @@ It also emits health every 2 seconds and language_detected events.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from typing import Any, Awaitable, Callable
+from datetime import datetime
+from typing import IO, Any, Awaitable, Callable
 
 from ..config import Config
 from ..translate.protocol import Sentence, Translation
@@ -42,6 +44,16 @@ class Publisher:
         self._sentences: dict[str, Sentence] = {}
         self._rtf_ema: float = 0.0
         self._mt_ms_avg: float = 300.0  # initial estimate; updated on each translation
+
+        # Session log — per-caption and health records for analyze_session (D34).
+        self._log_file: IO[str] | None = None
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            log_path = config.logs_dir / f"session_{timestamp}.jsonl"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._log_file = open(log_path, "w", encoding="utf-8")  # noqa: WPS515
+        except Exception as exc:
+            logger.warning("could not open session log: %s", exc)
 
     # ------------------------------------------------------------------
     # Sentence registry
@@ -87,6 +99,21 @@ class Publisher:
         }
         await self._send(caption)
 
+        if self._log_file is not None:
+            try:
+                self._log_file.write(json.dumps({
+                    "type": "caption",
+                    "ts": datetime.now().isoformat(),
+                    "utterance_id": sentence.utterance_id,
+                    "sentence_id": translation.sentence_id,
+                    "mt_ms": translation.mt_ms,
+                    "word_age_ms": round(word_age),
+                    "chars": len(translation.source_text),
+                }) + "\n")
+                self._log_file.flush()
+            except Exception:
+                pass
+
     async def on_language_detected(self, lang: str, confidence: float) -> None:
         await self._send({"type": "language_detected", "lang": lang, "confidence": confidence})
 
@@ -114,17 +141,44 @@ class Publisher:
     async def _send_health(self) -> None:
         chars_used, chars_budget = self._budget_fn()
         effective_max = self._segmenter.effective_max_utterance_ms
+        queue_depth = self._queue.qsize()
+        rtf_ema = round(self._rtf_ema, 3)
         word_age_ms = (
             self._config.silence_threshold_ms
             + self._mt_ms_avg
             + effective_max * (1.0 + self._rtf_ema)
         )
-        await self._send({
+        health: dict = {
             "type": "health",
-            "queue_depth": self._queue.qsize(),
-            "rtf": round(self._rtf_ema, 3),
+            "queue_depth": queue_depth,
+            "rtf": rtf_ema,
             "word_age_ms": round(word_age_ms),
             "effective_max_utterance_ms": effective_max,
             "chars_used": chars_used,
             "chars_budget": chars_budget,
-        })
+        }
+        await self._send(health)
+
+        if self._log_file is not None:
+            try:
+                self._log_file.write(json.dumps({
+                    "type": "health",
+                    "ts": datetime.now().isoformat(),
+                    "queue_depth": queue_depth,
+                    "rtf": rtf_ema,
+                    "word_age_ms": round(word_age_ms),
+                    "effective_max_utterance_ms": effective_max,
+                }) + "\n")
+                self._log_file.flush()
+            except Exception:
+                pass
+
+    def close(self) -> None:
+        """Flush and close the session log file."""
+        if self._log_file is not None:
+            try:
+                self._log_file.flush()
+                self._log_file.close()
+            except Exception:
+                pass
+            self._log_file = None

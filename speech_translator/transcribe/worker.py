@@ -106,9 +106,11 @@ def _run_worker_loop(
                 rtf = round(asr_ms / audio_ms, 4) if audio_ms > 0 else 0.0
                 record: dict[str, Any] = {
                     "utterance_id": utterance.id,
+                    "ts": datetime.now().isoformat(),
                     "audio_ms": audio_ms,
                     "asr_ms": asr_ms,
                     "rtf": rtf,
+                    "queue_depth": in_queue.qsize(),
                     "language": info.language,
                     "no_speech_prob": round(no_speech_prob, 4),
                     "avg_logprob": (
