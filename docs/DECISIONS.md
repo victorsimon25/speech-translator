@@ -1161,3 +1161,105 @@ restricted loader, PATH for native `LoadLibrary`. The function remains idempoten
 
 No-op on Linux (the directory list is empty). No behaviour change to `doctor` — it
 was already loading DLLs by absolute path, so it passed before and still passes.
+
+---
+
+## 2026-08-21 — Session 10 (Level 4, transcription worker)
+
+### D61. `_run_worker_loop` is extracted for testability — the D58 lesson applied one level up
+D58 proved that `model.transcribe()` returns a lazy generator and the benchmark
+harness had to be structured so the generator is drained inside the timed region.
+The same issue appears here: the worker loop must be callable with a fake model in
+a test process, without spawning a subprocess or touching CUDA.
+
+**Decision:** split `worker_main` into two functions:
+- `_load_model(config)` — the deferred import and DLL fix (D60), called once in
+  the subprocess.
+- `_run_worker_loop(in_q, out_q, model, lid, config, log_path)` — the main loop,
+  accepting any queue-like object and any object whose `.transcribe()` returns a
+  lazy generator. Tests call this directly with `queue.Queue` and `FakeWhisperModel`.
+
+`worker_main` ties them together and handles the error path. This is the same
+discipline as D56's `SpeechDetector` injection — test the state machine directly,
+not through the layer it depends on.
+
+**Consequence for tests:** `test_worker_main_load_failure_sends_error` patches
+`_load_model` via `monkeypatch.setattr` and calls `worker_main` as a regular
+function. This tests the error path without spawning a subprocess, which would not
+see the monkeypatch under `spawn`.
+
+### D62. `None` is the shutdown sentinel, not a `WorkerShutdown` dataclass
+A dedicated shutdown message would be more explicit but would require all callers
+to remember to import it. `None` cannot be a valid `Utterance`, is already the
+conventional queue sentinel in Python's own `multiprocessing` examples, and is
+zero-cost to pickle.
+
+**Rejected:** `WorkerShutdown` dataclass. Would have required updating every
+caller at Level 6 and added a fourth message type for no gain in clarity.
+
+### D63. `avg_logprob` is averaged across segments; `no_speech_prob` takes the maximum
+`faster-whisper` returns per-segment values. An utterance typically contains 1–3
+segments at `max_utterance_ms = 4000`.
+
+- **`avg_logprob` — simple mean.** Each segment's value is already an average over
+  its tokens. A simple mean across segments is the natural aggregate. No segment
+  is "more authoritative" than another.
+- **`no_speech_prob` — maximum.** The guard's purpose is to catch Whisper asserting
+  that the input is noise. If any segment has a high no_speech_prob, the whole
+  utterance is suspect. Taking the mean would let a genuinely-silent segment hide
+  behind real-speech segments.
+
+Both aggregations handle the empty-segments case by defaulting to 1.0 / −∞
+respectively, which the guard then rejects. An utterance that produced no segments
+is treated as non-speech.
+
+### D64. LID updates on every utterance, accepted or rejected
+The accepted/rejected decision happens after `lid.update()`. The reason: a
+hallucinated "Thank you." on a real Spanish utterance still carries language
+evidence — Whisper's `info.language` and `info.language_probability` reflect the
+audio's language, not the text quality. Withholding noisy utterances from the LID
+accumulator would slow convergence when VAD lets through brief chimes.
+
+The cost is negligible: a rejected utterance's language contribution is at most
+one vote in the accumulator. If Whisper consistently misidentifies the language on
+hallucinated output that is an open question worth monitoring at Level 7, but it
+is not worth a special case here.
+
+### D65. JSONL log goes to `config.logs_dir`, not a separate `var_dir` argument
+`config.data_dir` (= `REPO_ROOT / "var"`) and its derived `config.logs_dir`
+(= `data_dir / "logs"`) are already in `Config` and follow the same convention as
+`var/benchmark/` used by the benchmark harness. Passing a separate `var_dir`
+argument to `worker_main` would duplicate what the config already owns and split
+the canonical location across two places.
+
+The worker creates the directory (`logs_dir.mkdir(parents=True, exist_ok=True)`)
+before opening the file, so a fresh install with no `var/` directory works.
+
+## 2026-08-21 — Session 11 (Level 5 — sentences + translation)
+
+### D66. Monthly budget file path and why feed() carries preceding_silence_ms / closed_by
+
+**Budget file:** `config.data_dir / "usage" / f"chars_{YYYY_MM}.json"` rather
+than the single `config.mt_budget_file` path already in Config. The monthly key
+is load-bearing: the free-tier quota is 500 000 characters **per month** with
+no roll-over (D7, D31). A single file would silently accumulate across months
+and exhaust the quota in January from December's usage. The month key is derived
+at constructor time from `datetime.now()` so tests write the exact filename that
+the constructor will look for.
+
+**feed() signature:** `SentenceSplitter.feed()` accepts `preceding_silence_ms`
+and `closed_by` as keyword parameters beyond the `Transcript` argument shown in
+INTERFACES.md §4. These two fields are on the parent `Utterance`
+(`segment/segmenter.py`) but are stripped when the transcription worker emits a
+`Transcript` — they are not needed for ASR and including them would have
+required the IPC protocol to carry audio-level metadata past its natural
+boundary. The main pipeline has both the `Utterance` and the resulting
+`Transcript` and passes the metadata through. Both parameters default to safe
+values (`0`, `"silence"`) so the interface remains compatible for callers that
+only have a Transcript.
+
+**Translator config parameter:** the Translator constructor accepts an optional
+`Config` object. The specification says `Translator(api_key, target_lang,
+cache_maxsize)`, but without a way to inject a custom `data_dir` the budget-
+persistence test cannot redirect file I/O. An optional keyword argument keeps
+the public signature compliant while making tests hermetic.

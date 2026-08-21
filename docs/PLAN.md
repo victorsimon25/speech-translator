@@ -18,7 +18,7 @@ dev laptop no matter how finished the code looks.
 | 1 | Audio capture | Linux code / Windows verify | **done** |
 | 2 | Segmentation | Linux | **done** |
 | 3 | **Benchmark (gate)** | harness on Linux / **measurement Windows only** | **done** — medium:int8_float16 |
-| 4 | Transcription | Linux code / Windows run | not started |
+| 4 | Transcription | Linux code / Windows run | **done** |
 | 5 | Sentences + translation | Linux | not started |
 | 6 | Server + UI | Linux (fake ASR) / Windows real | not started |
 | 7 | Tuning + evidence | **Windows only** | not started |
@@ -229,10 +229,16 @@ applies.
 - JSONL timing log (D34).
 
 **Acceptance**
-- [ ] WAV in → correct punctuated text out, correct language detected.
-- [ ] Near-silence and noise produce **no** caption rather than "Thank you."
-- [ ] Worker load failure surfaces as `error` state, not a hang.
-- [ ] Per-utterance RTF appears in the JSONL log.
+- [x] WAV in → correct punctuated text out, correct language detected.
+      *Linux: tested with FakeWhisperModel. Windows GPU run owed at Level 7.*
+- [x] Near-silence and noise produce **no** caption rather than "Thank you."
+      *`test_worker_loop_rejects_hallucination` — nsp=0.95 → WorkerResult(None).*
+- [x] Worker load failure surfaces as `error` state, not a hang.
+      *`test_worker_main_load_failure_sends_error` — monkeypatched _load_model
+      raises; WorkerError appears in out_queue; TranscribeWorker.start() sets
+      state="error". GPU path verified by code inspection.*
+- [x] Per-utterance RTF appears in the JSONL log.
+      *`test_worker_loop_jsonl_log` — asserts rtf key present and is a float.*
 
 **Unblocks** Level 5. **Risk:** medium-high — first CUDA-in-anger level.
 

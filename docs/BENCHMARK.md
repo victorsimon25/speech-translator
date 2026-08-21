@@ -1,4 +1,4 @@
-# Benchmark — Whisper on the Windows GPU
+d4# Benchmark — Whisper on the Windows GPU
 
 **Status: run 2026-08-20.** Selected **medium at int8_float16** — RTF 0.488,
 peak VRAM 1849 MB, no thermal throttling. See results below.

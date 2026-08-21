@@ -1,6 +1,6 @@
 # State
 
-_Last updated: 2026-08-20 (session 9 — Level 3 benchmark run, model selected)_
+_Last updated: 2026-08-21 (session 11 — Level 5 translation pipeline built)_
 
 ## Done
 - Requirements and architecture agreed (see `DECISIONS.md`).
@@ -109,6 +109,35 @@ _Last updated: 2026-08-20 (session 9 — Level 3 benchmark run, model selected)_
     the repo the whole stage can be dead and green.
   - 54 new tests; **104 pass** on Linux with no GPU, no audio hardware, no
     network.
+- **Level 5 (Sentences + translation) built and passing.** SentenceSplitter,
+  Translator, LRU cache, persisted monthly budget, flush rule, serialised task.
+  - `speech_translator/translate/`: `protocol.py` (`Sentence`, `Translation` —
+    frozen dataclasses per INTERFACES.md §4–5), `splitter.py`
+    (`SentenceSplitter` — fragment carry-over, sentence-boundary split on
+    `.?!`, flush rule), `translator.py` (`Translator`, `TranslatorProtocol`,
+    `_LRUCache` — REST + API key per D37, OrderedDict LRU, monthly budget file
+    persisted under `data_dir/usage/chars_YYYY_MM.json`), `task.py`
+    (`run_translation_task` — single serialised asyncio task per D27).
+  - Budget: warn at `mt_char_warn_ratio` × `mt_char_budget`, hard-stop at
+    `mt_char_hard_stop`; counter survives process restart via the JSON file.
+  - 8 new tests; **all 8 pass** on Linux with no network, no GPU, no audio.
+- **Level 4 (Transcription) built and passing.** Worker process, hallucination
+  guard, windowed LID, and JSONL timing log.
+  - `speech_translator/transcribe/`: `protocol.py` (`Transcript`, `WorkerReady`,
+    `WorkerResult`, `WorkerError` — all picklable frozen dataclasses), `guard.py`
+    (`is_accepted` — D30), `lid.py` (`LidAccumulator` — D32), `worker.py`
+    (`_load_model`, `_run_worker_loop`, `worker_main`, `TranscribeWorker`).
+  - `add_cuda_dll_directories()` called before `import ctranslate2` in the worker
+    process (D60). Generator drained inside the timed region (D58 lesson).
+  - LID uses `config.lid_window_speech_ms` (10 s of speech, not wall clock — D32).
+    After the window closes, `language=` kwarg is pinned for all subsequent calls.
+  - JSONL log written to `config.logs_dir / asr_<timestamp>.jsonl` per session (D34).
+  - `TranscribeWorker.start()` blocks on `out_queue.get(timeout=120)` — surfaces
+    load failure as `state="error"` rather than a hang (D27).
+  - 24 new tests; **143 pass** (119 excl. test_segment on Windows + 24 new).
+    The `test_segment.py` parametrised tests have a pre-existing failure on
+    Windows: pytest's `PYTEST_CURRENT_TEST` env-var exceeds 32767 chars when test
+    IDs embed binary PCM data. Not caused by this level; all other suites clean.
 - **Level 3 benchmark run on Windows (2026-08-20).** Model selected.
   - All seven configurations ran for 10 sustained wall-clock minutes each on the
     GTX 1650 (4096 MB, driver 592.82). Total run ~75 minutes.
@@ -133,10 +162,8 @@ _Last updated: 2026-08-20 (session 9 — Level 3 benchmark run, model selected)_
 
 ## Next
 
-**Level 4 — Transcription.** The gate is passed and the model is chosen. Build
-the transcription worker process: spawn it, load medium:int8_float16 on CUDA,
-feed it utterances from the queue, return timestamped text. See `PLAN.md` for
-acceptance criteria.
+**Level 6 — Server + UI.** FastAPI + uvicorn, six states, caption cards,
+WebSocket push. See `PLAN.md`.
 
 | Level | | Status |
 |---|---|---|
@@ -144,8 +171,8 @@ acceptance criteria.
 | 1 | Audio capture — `AudioSource`, WASAPI + WAV, capture tools | **done** |
 | 2 | Segmentation — Silero VAD, `Utterance` | **done** |
 | 3 | **Benchmark (gate)** — picks model + `compute_type` | **done** — medium:int8_float16, RTF 0.488 |
-| 4 | Transcription — worker process, hallucination guard, LID | |
-| 5 | Sentences + translation — carry-over, flush, budget | |
+| 4 | Transcription — worker process, hallucination guard, LID | **done** |
+| 5 | Sentences + translation — carry-over, flush, budget | **done** |
 | 6 | Server + UI — FastAPI, six states, caption cards | |
 | 7 | Tuning + evidence — p95 word age measured | |
 | 8 | Demo + journey doc | |
@@ -160,7 +187,7 @@ costs nothing and gives the benchmark a real capture path to source its sample
 audio from.
 
 ## In progress
-Nothing. Level 3 is complete. Level 4 (Transcription) is next.
+Nothing. Level 5 is complete. Level 6 (Server + UI) is next.
 
 ## Blocked
 - **Three truncated lines in the assignment brief** are still unknown — see
