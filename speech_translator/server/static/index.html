@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Speech Translator</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- Top bar: status, speaking indicator, language controls, health -->
+<div id="topbar">
+
+  <div id="status-badge" class="state-idle">
+    <span class="dot"></span>
+    <span class="label">Idle</span>
+  </div>
+
+  <div id="speaking-dot" title="Speaking indicator"></div>
+
+  <div id="lang-row">
+    <span id="src-lang-chip" title="Detected source language — click to override">Auto</span>
+    <span id="src-lang-arrow">→</span>
+    <select id="tgt-lang-select" title="Target language">
+      <option value="en">EN</option>
+      <option value="es">ES</option>
+      <option value="fr">FR</option>
+      <option value="de">DE</option>
+      <option value="it">IT</option>
+      <option value="pt">PT</option>
+      <option value="zh">ZH</option>
+      <option value="ja">JA</option>
+      <option value="ko">KO</option>
+      <option value="ru">RU</option>
+      <option value="ar">AR</option>
+      <option value="hi">HI</option>
+    </select>
+  </div>
+
+  <div id="health-badge">–</div>
+
+  <button id="export-btn" class="btn" title="Download transcript as text">Export</button>
+
+</div>
+
+<!-- Caption stream (append-only, D11) -->
+<div id="captions-wrapper">
+  <div id="captions"></div>
+</div>
+
+<!-- Jump-to-live button -->
+<button id="jump-btn" class="btn primary">↓ Jump to live</button>
+
+<!-- Bottom bar: start/stop, state detail -->
+<div id="bottombar">
+  <button id="start-btn" class="btn primary">Start</button>
+  <button id="stop-btn"  class="btn" disabled>Stop</button>
+  <span id="state-detail"></span>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

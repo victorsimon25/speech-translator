@@ -1,6 +1,6 @@
 # State
 
-_Last updated: 2026-08-21 (session 11 — Level 5 translation pipeline built)_
+_Last updated: 2026-08-21 (session 12 — Level 6 server + UI built)_
 
 ## Done
 - Requirements and architecture agreed (see `DECISIONS.md`).
@@ -109,6 +109,30 @@ _Last updated: 2026-08-21 (session 11 — Level 5 translation pipeline built)_
     the repo the whole stage can be dead and green.
   - 54 new tests; **104 pass** on Linux with no GPU, no audio hardware, no
     network.
+- **Level 6 (Server + UI) built and passing.** FastAPI app, WebSocket, six
+  session states, backpressure controller, publisher, browser caption UI.
+  - `speech_translator/server/`: `session.py` (`SessionController` — asyncio
+    state machine: idle → loading → running ↔ degraded → error; `worker_factory`
+    injection for tests), `backpressure.py` (`BackpressureController` — D28:
+    adaptive shrink on consecutive deep depth, drop-oldest on full queue, RTF EMA
+    recovery), `publisher.py` (`Publisher` — sentence registry keyed by sentence_id,
+    joins `Translation` back to `Sentence`, health message every 2 s), `app.py`
+    (`create_app` — `GET /`, `StaticFiles /static`, `WS /ws`; one client at a time
+    per D38), `fake.py` (`FakeTranscribeWorker` — instant, in-process stand-in
+    for GPU worker; no WorkerReady sentinel on out_queue, matching real contract).
+  - `speech_translator/server/static/`: `index.html` (status badge, language row,
+    health bar, caption container, jump-to-live button, export), `app.js` (vanilla
+    WebSocket client, append-only caption cards, gap dividers, auto-scroll, LID
+    chip, export via Blob), `style.css` (six state colours: grey/blue-pulse/yellow/
+    green/orange/red).
+  - `speech_translator/__main__.py` updated from stub to real entry point:
+    `uvicorn.run(create_app(cfg), host=cfg.host, port=cfg.port)`.
+  - `Translator.chars_used` property added (exposes monthly counter to health msg).
+  - Async/sync bridge: `loop.run_in_executor(None, lambda: out_queue.get(timeout=0.5))`
+    — 0.5 s timeout makes `task.cancel()` deliverable; `_stop()` also puts `None`
+    sentinel to unblock immediately.
+  - 6 new tests; **all 6 pass** on Linux with no GPU, no audio, no network.
+    Full suite: 133 passed, 4 skipped (pre-existing Windows-only test_segment issue).
 - **Level 5 (Sentences + translation) built and passing.** SentenceSplitter,
   Translator, LRU cache, persisted monthly budget, flush rule, serialised task.
   - `speech_translator/translate/`: `protocol.py` (`Sentence`, `Translation` —
@@ -162,8 +186,8 @@ _Last updated: 2026-08-21 (session 11 — Level 5 translation pipeline built)_
 
 ## Next
 
-**Level 6 — Server + UI.** FastAPI + uvicorn, six states, caption cards,
-WebSocket push. See `PLAN.md`.
+**Level 7 — Tuning + evidence.** p95 word age measured on real meeting audio,
+VAD thresholds validated, gate 3 closed with real MT latency. See `PLAN.md`.
 
 | Level | | Status |
 |---|---|---|
@@ -173,7 +197,7 @@ WebSocket push. See `PLAN.md`.
 | 3 | **Benchmark (gate)** — picks model + `compute_type` | **done** — medium:int8_float16, RTF 0.488 |
 | 4 | Transcription — worker process, hallucination guard, LID | **done** |
 | 5 | Sentences + translation — carry-over, flush, budget | **done** |
-| 6 | Server + UI — FastAPI, six states, caption cards | |
+| 6 | Server + UI — FastAPI, six states, caption cards | **done** |
 | 7 | Tuning + evidence — p95 word age measured | |
 | 8 | Demo + journey doc | |
 
@@ -187,7 +211,7 @@ costs nothing and gives the benchmark a real capture path to source its sample
 audio from.
 
 ## In progress
-Nothing. Level 5 is complete. Level 6 (Server + UI) is next.
+Nothing. Level 6 is complete. Level 7 (Tuning + evidence) is next.
 
 ## Blocked
 - **Three truncated lines in the assignment brief** are still unknown — see

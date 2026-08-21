@@ -97,6 +97,11 @@ class Translator:
     # Public API
     # ------------------------------------------------------------------
 
+    @property
+    def chars_used(self) -> int:
+        """Characters consumed this month (D31); exposed for the health message."""
+        return self._chars_used
+
     async def translate(self, sentence: Sentence) -> Translation:
         src = sentence.language
         tgt = self._target_lang

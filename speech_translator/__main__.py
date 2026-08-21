@@ -1,29 +1,32 @@
 """Application entry point — ``python -m speech_translator``.
 
-Not built yet. The server and UI land at Level 6 (`docs/PLAN.md`); this exists
-so the documented command names what is missing instead of raising a bare
-``No module named speech_translator.__main__``.
+Starts the FastAPI + uvicorn server on host:port from config (D38).
+The fake ASR path (FakeTranscribeWorker) is the default on Linux when no
+CUDA device is present, so the full pipeline can be exercised without the
+demo machine.
 """
 
 from __future__ import annotations
 
 import sys
 
-from . import __version__
+import uvicorn
+
+from .config import load_config
 from .logging_setup import force_utf8
+from .server.app import create_app
 
 
 def main() -> int:
     force_utf8()
+    cfg = load_config()
+    app = create_app(cfg)
     print(
-        f"speech-translator {__version__} — the pipeline is not built yet.\n"
-        f"Level 0 (foundation) is complete; the server and UI arrive at Level 6.\n"
-        f"See docs/PLAN.md for the ladder, and run the preflight now:\n"
-        f"\n"
-        f"    python -m speech_translator.doctor\n",
+        f"speech-translator starting on http://{cfg.host}:{cfg.port}",
         file=sys.stderr,
     )
-    return 2
+    uvicorn.run(app, host=cfg.host, port=cfg.port)
+    return 0
 
 
 if __name__ == "__main__":

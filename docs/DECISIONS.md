@@ -1263,3 +1263,54 @@ only have a Transcript.
 cache_maxsize)`, but without a way to inject a custom `data_dir` the budget-
 persistence test cannot redirect file I/O. An optional keyword argument keeps
 the public signature compliant while making tests hermetic.
+
+---
+
+## 2026-08-21 — Session 12 (Level 6 — server + UI)
+
+### D67. Publisher owns the Sentence registry; _asr_bridge unblocks on a sentinel
+
+**Sentence/Translation join.** `Translation` carries only what the translator
+produced; the caption's `utterance_id`, `preceding_silence_ms` and `closed_by`
+come from the `Sentence`. The join lives in `Publisher`, which holds a
+`_sentences: dict[str, Sentence]` populated by the session bridge before each
+Sentence is dispatched to the translator.
+
+Two alternative join designs were considered and rejected:
+
+- **Reorder buffer in the Publisher.** The translator task is already serialized
+  (D27 — single task guarantees FIFO). A reorder buffer would add complexity
+  with no benefit: Translations already arrive in sentence order.
+- **Carry metadata on Translation.** Would require the translator to accept and
+  forward opaque fields it does not use, coupling a clean interface to a
+  presentation concern.
+
+The dict is the natural choice: keyed by `sentence_id`, popped on receipt of
+the matching Translation, so memory never accumulates beyond the in-flight
+window.
+
+**`_asr_bridge` unblocking.** The bridge task awaits
+`loop.run_in_executor(None, lambda: worker.out_queue.get(timeout=0.5))`.
+A plain `queue.get()` (no timeout) makes `task.cancel()` undeliverable: the
+executor thread is blocked and `asyncio.run()` waits indefinitely for the
+thread pool to drain.
+
+Two mechanisms combine for clean shutdown:
+
+1. **Timeout = 0.5 s** — the thread returns at most 0.5 s after the last item
+   arrives; `CancelledError` is delivered at the next `await asyncio.sleep(0)`.
+2. **None sentinel on `out_queue`** — `_stop()` calls
+   `worker.out_queue.put_nowait(None)` before `task.cancel()`, so the thread
+   wakes up immediately rather than waiting the full 0.5 s. The bridge treats
+   `None` as a stop signal and exits the loop.
+
+This is D46 / D53's principle applied at the IPC layer: state that must survive
+a boundary (the task's cancellation window) requires an explicit signal rather
+than relying on the underlying primitive to cooperate.
+
+**FakeTranscribeWorker contract.** The real `TranscribeWorker.start()` blocks
+until it receives `WorkerReady` from `out_queue`, consuming the sentinel
+before returning. `FakeTranscribeWorker.start()` therefore does NOT put
+`WorkerReady` on `out_queue` — doing so would leave a stray object that the
+bridge task would see and silently ignore, masking the fact that the fake
+contract differs from the real one.
