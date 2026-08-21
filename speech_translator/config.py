@@ -170,7 +170,7 @@ class Config:
 
     # -- Translation (D7, D31, D37) ---------------------------------------
     target_lang: str = "en"
-    translate_url: str = "https://translation.googleapis.com/language/translate/v2"
+    translate_url: str = "https://api.mymemory.translated.net/get"
     translate_timeout_s: float = 5.0
     translate_retries: int = 2
     translate_cache_size: int = 512

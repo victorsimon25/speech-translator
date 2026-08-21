@@ -1314,3 +1314,48 @@ before returning. `FakeTranscribeWorker.start()` therefore does NOT put
 `WorkerReady` on `out_queue` — doing so would leave a stray object that the
 bridge task would see and silently ignore, masking the fact that the fake
 contract differs from the real one.
+
+---
+
+## 2026-08-21 — Session 13 (Level 7, translation provider switch)
+
+### D68. MyMemory replaces Google Cloud Translation (D37 superseded)
+
+Google Cloud Translation requires a billing account to be enabled even for
+free-tier usage — this was the reason gate 3 was reported "unknown" at Level 3
+(session 9, `API_MIGRATION_NOTE.md`). Without a live MT measurement the p95
+word age cannot be closed as a measured claim (D51).
+
+LibreTranslate's public instances were considered first (`translate.argosopentech.com`)
+but DNS resolution failed from the demo machine and all other public mirrors
+were either unreachable (DNS) or returning 502/400 at the time of session 13.
+
+**Decision:** switch the translation provider to **MyMemory**
+(`https://api.mymemory.translated.net/get`). No API key is required. Free
+tier: 1000 requests/day, 5000 words/day — ample for development, rehearsal
+and the demo. Providing an email as `de=` parameter raises the ceiling to
+10 000 words/day.
+
+**What changed:**
+- `config.py`: `translate_url` now defaults to `https://api.mymemory.translated.net/get`.
+- `translator.py`: HTTP method changes POST → GET; params are `q={text}&langpair={src}|{tgt}`;
+  response parsed as `data["responseData"]["translatedText"]`; `quotaFinished: true`
+  raises an explicit error instead of returning garbled text.
+- `doctor.py`: `check_api_key` passes when no key is set; `check_translation`
+  probes unconditionally with GET.
+- `GOOGLE_TRANSLATE_API_KEY` env var is repurposed: if set, passed as `de=`
+  (email for higher quota) rather than an auth credential. Field name is kept
+  for backwards compat with any `.env` files already created.
+
+**Why this is a real decision, not a detail:** D37 was explicit that the
+Translator is "the most likely thing to change" and should stay behind the
+`TranslatorProtocol` interface. That interface is unchanged; only the
+implementation class is updated. The monthly character budget tracking (D31)
+is kept as a safeguard and will count request volume instead of characters for
+daily-quota purposes.
+
+**Trade-off accepted:** MyMemory is slower than Google's CDN (~300–600 ms
+median) and has a daily word cap. For a single-user demo session this is fine;
+gate 3's 7 s ceiling has ~400 ms of headroom even at the D25 predicted value.
+MT latency will be measured at Level 7 so the actual impact on the p95 word
+age is recorded rather than assumed.

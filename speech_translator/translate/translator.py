@@ -1,4 +1,4 @@
-"""Google Cloud Translation REST client (INTERFACES.md §5, D31, D37)."""
+"""LibreTranslate REST client (INTERFACES.md §5, D31, D68)."""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ class TranslatorProtocol(Protocol):
 
 
 class Translator:
-    """Translate sentences via Google Cloud Translation REST API.
+    """Translate sentences via LibreTranslate REST API (D68).
 
     Budget tracking (D31): cumulative characters are persisted to a month-keyed
     JSON file under config.data_dir / "usage" so that a process restart cannot
@@ -161,13 +161,18 @@ class Translator:
             if attempt > 0:
                 await asyncio.sleep(0.2)
             try:
-                resp = await self._client.post(
-                    f"{self._config.translate_url}?key={self._api_key}",
-                    json={"q": text, "source": src, "target": tgt, "format": "text"},
+                params: dict = {"q": text, "langpair": f"{src}|{tgt}"}
+                if self._api_key:
+                    params["de"] = self._api_key  # email raises daily quota to 10 000 words
+                resp = await self._client.get(
+                    self._config.translate_url,
+                    params=params,
                 )
                 resp.raise_for_status()
                 data = resp.json()
-                translated: str = data["data"]["translations"][0]["translatedText"]
+                if data.get("quotaFinished"):
+                    raise RuntimeError("MyMemory daily quota reached")
+                translated: str = data["responseData"]["translatedText"]
                 mt_ms = int((time.monotonic() - t0) * 1000)
 
                 self._cache.set(cache_key, translated)

@@ -343,14 +343,15 @@ def check_loopback() -> Result:
 
 
 def check_api_key(c: cfg.Config) -> Result:
-    if not c.google_translate_api_key:
-        return Result(
-            "Translation API key",
-            FAIL,
-            "GOOGLE_TRANSLATE_API_KEY unset — copy .env.example to .env (D37)",
-        )
+    """LibreTranslate public endpoint needs no key; a key is optional (D68)."""
     key = c.google_translate_api_key
-    return Result("Translation API key", PASS, f"present ({len(key)} chars, ends …{key[-4:]})")
+    if key:
+        return Result("Translation API key", PASS, f"present ({len(key)} chars, ends …{key[-4:]})")
+    return Result(
+        "Translation API key",
+        PASS,
+        "not set — public LibreTranslate endpoint, no key required (D68)",
+    )
 
 
 def check_translation(c: cfg.Config, allow_network: bool) -> Result:
@@ -358,23 +359,26 @@ def check_translation(c: cfg.Config, allow_network: bool) -> Result:
     print the non-ASCII answer, which is the D41 cp1252 failure."""
     if not allow_network:
         return Result("Live translation", SKIP, "--no-net")
-    if not c.google_translate_api_key:
-        return Result("Live translation", SKIP, "no API key")
     probe = "¿Qué?"  # 5 characters, non-ASCII on purpose
     try:
         import httpx
 
-        r = httpx.post(
+        params: dict = {"q": probe, "langpair": "es|en"}
+        if c.google_translate_api_key:
+            params["de"] = c.google_translate_api_key
+        r = httpx.get(
             c.translate_url,
-            params={"key": c.google_translate_api_key},
-            data={"q": probe, "source": "es", "target": "en", "format": "text"},
+            params=params,
             timeout=c.translate_timeout_s,
         )
         r.raise_for_status()
-        out = r.json()["data"]["translations"][0]["translatedText"]
+        data = r.json()
+        if data.get("quotaFinished"):
+            return Result("Live translation", FAIL, "MyMemory daily quota reached")
+        out = data["responseData"]["translatedText"]
     except Exception as exc:  # noqa: BLE001
         return Result("Live translation", FAIL, f"{type(exc).__name__}: {exc}")
-    return Result("Live translation", PASS, f"{probe} → {out}  ({len(probe)} chars billed)")
+    return Result("Live translation", PASS, f"{probe} → {out}")
 
 
 def check_writable_dirs(c: cfg.Config) -> Result:

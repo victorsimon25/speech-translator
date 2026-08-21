@@ -207,7 +207,7 @@ def test_translation_api_failure_degrades(tmp_path: Path, monkeypatch: pytest.Mo
     async def _always_fail(self_client: object, url: str, **kwargs: object) -> None:
         raise httpx.ConnectError("simulated network failure")
 
-    monkeypatch.setattr(httpx.AsyncClient, "post", _always_fail)
+    monkeypatch.setattr(httpx.AsyncClient, "get", _always_fail)
 
     cfg = Config(data_dir=tmp_path)
     translator = Translator(api_key="fake-key", target_lang="en", config=cfg)
@@ -230,7 +230,7 @@ def test_translation_skip_same_lang(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         called.append(1)
         raise AssertionError("HTTP must not be called for same-language pair")
 
-    monkeypatch.setattr(httpx.AsyncClient, "post", _should_not_be_called)
+    monkeypatch.setattr(httpx.AsyncClient, "get", _should_not_be_called)
 
     cfg = Config(data_dir=tmp_path)
     translator = Translator(api_key="fake-key", target_lang="en", config=cfg)
@@ -249,7 +249,7 @@ def test_translation_lru_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     """Translating the same text twice hits the HTTP endpoint exactly once."""
     call_count: list[int] = []
 
-    async def _fake_post(self_client: object, url: str, **kwargs: object) -> object:
+    async def _fake_get(self_client: object, url: str, **kwargs: object) -> object:
         call_count.append(1)
 
         class _FakeResponse:
@@ -257,11 +257,11 @@ def test_translation_lru_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
                 pass
 
             def json(self) -> dict:
-                return {"data": {"translations": [{"translatedText": "Hola mundo."}]}}
+                return {"responseData": {"translatedText": "Hola mundo."}, "quotaFinished": False}
 
         return _FakeResponse()
 
-    monkeypatch.setattr(httpx.AsyncClient, "post", _fake_post)
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_get)
 
     cfg = Config(data_dir=tmp_path)
     translator = Translator(api_key="fake-key", target_lang="en", config=cfg)
