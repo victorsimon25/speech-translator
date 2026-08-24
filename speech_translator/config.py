@@ -164,9 +164,17 @@ class Config:
     recover_rtf_ema: float = 0.35
     recover_after_s: int = 30
 
-    # -- Language identification (D32) ------------------------------------
+    # -- Language identification (D32, D69) --------------------------------
     #: Speech time, not wall clock — silence must not count toward the window.
     lid_window_speech_ms: int = 10_000
+    #: After locking, re-run Whisper without a language pin every N utterances
+    #: to check whether the audio language has changed (D69).
+    lid_probe_interval: int = 5
+    #: How many consecutive probe mismatches (different language with sufficient
+    #: confidence) trigger a LID reset so the new language is re-learnt.
+    lid_probe_streak: int = 2
+    #: Minimum Whisper language probability to count a probe as a mismatch.
+    lid_probe_min_confidence: float = 0.7
 
     # -- Translation (D7, D31, D37) ---------------------------------------
     target_lang: str = "en"
@@ -238,6 +246,9 @@ def load_config() -> Config:
         no_speech_prob_max=_env_float("NO_SPEECH_PROB_MAX", 0.6),
         avg_logprob_min=_env_float("AVG_LOGPROB_MIN", -1.0),
         lid_window_speech_ms=_env_int("LID_WINDOW_SPEECH_MS", 10_000),
+        lid_probe_interval=_env_int("LID_PROBE_INTERVAL", 5),
+        lid_probe_streak=_env_int("LID_PROBE_STREAK", 2),
+        lid_probe_min_confidence=_env_float("LID_PROBE_MIN_CONFIDENCE", 0.7),
         target_lang=_env_str("TARGET_LANG", "en"),
         mt_char_budget=_env_int("MT_CHAR_BUDGET", 500_000),
         mt_char_hard_stop=_env_int("MT_CHAR_HARD_STOP", 480_000),

@@ -240,10 +240,20 @@ Write results into this file and update `STATE.md`. The table below is what
 | small | float16 | 0.668 | 0.669 | 991 MB | MT unmeasured | **no** | unknown | yes | throttling +0.2%; warm-up 2.42 s; load 1.9 s |
 | small | int8_float16 | 0.275 | 0.269 | 711 MB | MT unmeasured | yes | unknown | yes | throttling -2.0%; warm-up 0.78 s; load 4.0 s |
 | medium | float16 | 1.382 | 1.502 | 2801 MB | MT unmeasured | **no** | unknown | yes | throttling +8.7%; warm-up 4.76 s; load 5.0 s |
-| medium | int8_float16 | **0.530** | **0.474** | **1849 MB** | MT unmeasured | **yes** | unknown | **yes** | **SELECTED** · throttling -10.6%; warm-up 1.53 s; load 7.8 s |
+| medium | int8_float16 | **0.530** | **0.474** | **1849 MB** | **5.9 s (measured, 2026-08-24)** | **yes** | **yes** | **yes** | **SELECTED** · throttling -10.6%; warm-up 1.53 s; load 7.8 s |
 | large-v3-turbo | float16 | 2.594 | 3.382 | 2369 MB | MT unmeasured | **no** | unknown | yes | throttling +30.4%; warm-up 7.76 s; load 3.8 s |
 | large-v3-turbo | int8_float16 | 0.607 | 0.568 | 1353 MB | MT unmeasured | **no** | unknown | yes | throttling -6.3%; warm-up 1.93 s; load 5.9 s |
 | large-v3 | int8_float16 | 0.749 | 0.694 | 3217 MB | MT unmeasured | **no** | unknown | yes | throttling -7.4%; warm-up 2.10 s; load 38.8 s |
+
+**Gate 3 — measured (2026-08-24):** 11.3-minute live run, p95 word age **5.9 s**
+(< 7 s). VRAM peaked at 1375 MiB; temperature peaked at 61 °C; SM clocks held
+at 1785 MHz with no thermal throttling. Only 2 utterances dropped in 11 minutes.
+**Hardware note:** the GTX 1650 has no dedicated display engine. Chrome
+hardware-accelerated video decode competes directly with CUDA and causes WDDM
+preemption spikes (RTF 5–18×). Disable Chrome hardware acceleration
+(`chrome://settings/system`) **or** play the audio source through VLC before
+running a timed session or demo. This is a one-time machine setup, not a
+per-session step.
 
 **Subjective accuracy note (Spanish):** medium:int8_float16 produces coherent
 Spanish transcripts even on bilingual audio — proper nouns are approximated but

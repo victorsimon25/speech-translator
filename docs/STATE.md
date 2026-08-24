@@ -109,6 +109,26 @@ _Last updated: 2026-08-21 (session 12 — Level 6 server + UI built)_
     the repo the whole stage can be dead and green.
   - 54 new tests; **104 pass** on Linux with no GPU, no audio hardware, no
     network.
+- **Level 7 (Tuning + evidence) complete.** 11.3-minute sustained live run on the
+  Windows demo machine (2026-08-24). All four acceptance criteria pass:
+  - **p95 word age 5.9 s** (< 7 s gate, measured end to end via JSONL log).
+  - **Queue depth ≤ 1 for 89 % of utterances** (mean 0.53); only 2 drops in
+    11 minutes. Chrome hardware-accelerated video decode competed with CUDA on
+    the GTX 1650's unified compute fabric and caused WDDM preemption spikes —
+    disabling it (or using VLC as the audio source) eliminates them.
+  - **No CUDA OOM** across 11 minutes with the browser open. VRAM peaked at
+    1375 MiB; temperature peaked at 61 °C; SM clocks held at 1785 MHz
+    throughout with no throttling.
+  - **All PRD DoD items evidenced** (p95 word age, RTF, language detection,
+    caption correctness, queue stability).
+  - Translation provider: MyMemory REST, no API key required (D68). Setting
+    `GOOGLE_TRANSLATE_API_KEY=<email>` in `.env` raises the free daily word
+    ceiling from 5 000 to 10 000 words.
+  - Adaptive LID probe added (D69): every 5 utterances after locking, Whisper
+    runs without the language pin. Two consecutive mismatches reset the LID so
+    a language switch (e.g. English interviewer during a Spanish session) is
+    detected within ~20 s and the pipeline adapts. The `src == tgt` skip (D31)
+    then handles EN → EN pass-through without a translation round-trip.
 - **Level 6 (Server + UI) built and passing.** FastAPI app, WebSocket, six
   session states, backpressure controller, publisher, browser caption UI.
   - `speech_translator/server/`: `session.py` (`SessionController` — asyncio
@@ -186,8 +206,9 @@ _Last updated: 2026-08-21 (session 12 — Level 6 server + UI built)_
 
 ## Next
 
-**Level 7 — Tuning + evidence.** p95 word age measured on real meeting audio,
-VAD thresholds validated, gate 3 closed with real MT latency. See `PLAN.md`.
+**Level 8 — Demo + journey doc.** Demo script, two clean rehearsal runs, journey
+doc assembled from `docs/journey/` and delivered 48 h before the interview.
+See `PLAN.md`.
 
 | Level | | Status |
 |---|---|---|
@@ -198,7 +219,7 @@ VAD thresholds validated, gate 3 closed with real MT latency. See `PLAN.md`.
 | 4 | Transcription — worker process, hallucination guard, LID | **done** |
 | 5 | Sentences + translation — carry-over, flush, budget | **done** |
 | 6 | Server + UI — FastAPI, six states, caption cards | **done** |
-| 7 | Tuning + evidence — p95 word age measured | |
+| 7 | Tuning + evidence — p95 word age measured | **done** — p95 5.9 s, queue ≤1 89%, VRAM 1375 MiB |
 | 8 | Demo + journey doc | |
 
 **Do not duplicate `PLAN.md` here.** This file records status; that one records
@@ -211,7 +232,7 @@ costs nothing and gives the benchmark a real capture path to source its sample
 audio from.
 
 ## In progress
-Nothing. Level 6 is complete. Level 7 (Tuning + evidence) is next.
+Nothing. Level 7 is complete. Level 8 (Demo + journey doc) is next.
 
 ## Blocked
 - **Three truncated lines in the assignment brief** are still unknown — see

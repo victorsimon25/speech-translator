@@ -19,9 +19,9 @@ dev laptop no matter how finished the code looks.
 | 2 | Segmentation | Linux | **done** |
 | 3 | **Benchmark (gate)** | harness on Linux / **measurement Windows only** | **done** — medium:int8_float16 |
 | 4 | Transcription | Linux code / Windows run | **done** |
-| 5 | Sentences + translation | Linux | not started |
-| 6 | Server + UI | Linux (fake ASR) / Windows real | not started |
-| 7 | Tuning + evidence | **Windows only** | not started |
+| 5 | Sentences + translation | Linux | **done** |
+| 6 | Server + UI | Linux (fake ASR) / Windows real | **done** |
+| 7 | Tuning + evidence | **Windows only** | **done** |
 | 8 | Demo + journey doc | Windows | not started |
 
 ---

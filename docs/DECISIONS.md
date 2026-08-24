@@ -1359,3 +1359,36 @@ median) and has a daily word cap. For a single-user demo session this is fine;
 gate 3's 7 s ceiling has ~400 ms of headroom even at the D25 predicted value.
 MT latency will be measured at Level 7 so the actual impact on the p95 word
 age is recorded rather than assumed.
+
+---
+
+## D69 — Adaptive LID: probe for language switches after locking
+
+**Context:** Once the LID window (D32) fills, `language=<locked>` is pinned to
+every Whisper call. When the audio switches to a different language — e.g.
+an English interviewer during a Spanish interview — Whisper is forced to
+transcribe it as the locked language. The result is slow, low-quality output
+(RTF → 1.0+), queue buildup to depth 4, and mass backpressure drops. The
+`src == tgt` translation skip (D31) already handles the caption path correctly;
+the problem is Whisper's forced-language penalty, not the translation layer.
+
+**Decision:** Every `lid_probe_interval` utterances after locking, skip the
+`language=` pin and let Whisper auto-detect. If the detected language differs
+from the lock with confidence ≥ `lid_probe_min_confidence` for
+`lid_probe_streak` consecutive probes, reset the LID so the new language is
+re-learnt over the next speech window. Default values:
+`lid_probe_interval=5`, `lid_probe_streak=2`, `lid_probe_min_confidence=0.7`.
+
+**Effect:** A language switch is detected within ~10 utterances (~20 s of
+audio). The 1-in-5 un-pinned calls add a small RTF overhead (language
+detection is skipped in the other 4), but this is negligible compared to the
+RTF penalty of forcing the wrong language. The existing `src == tgt` skip (D31)
+means that once the LID re-locks to the new language, captions in the target
+language appear directly without a translation round-trip.
+
+**Trade-off accepted:** A brief bilingual passage (< `lid_probe_streak` ×
+`lid_probe_interval` utterances) will not trigger a reset, so a single
+interjection in another language is still processed under the locked language.
+This is the correct behaviour — it avoids thrashing between languages on
+a multilingual remark. A sustained switch (two or more probe hits) is what
+causes a reset.

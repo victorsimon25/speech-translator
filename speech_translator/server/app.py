@@ -11,8 +11,11 @@ Usage::
 
 from __future__ import annotations
 
+import logging
 import pathlib
 from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
@@ -67,6 +70,7 @@ def create_app(
         await ws.accept()
 
         if _client is not None:
+            logger.info("WS rejected — slot occupied (D38)")
             await ws.send_json({
                 "type": "error",
                 "detail": "Only one client at a time (D38)",
@@ -75,19 +79,24 @@ def create_app(
             return
 
         _client = ws
+        logger.info("WS accepted — client connected")
         # Re-set broadcast now that _client is assigned, so the first messages
         # (including the initial state broadcast if any) reach this client.
         session.set_broadcast(broadcast)
+        # Sync current state to the newly-connected client (reconnect case).
+        await broadcast({"type": "state", "state": session.state, "detail": ""})
 
         try:
             while True:
                 data = await ws.receive_json()
+                logger.info("WS message received: type=%s session_state=%s", data.get("type"), session.state)
                 await session.handle_message(data)
         except WebSocketDisconnect:
-            pass
-        except Exception:
-            pass
+            logger.info("WS disconnected cleanly")
+        except Exception as exc:
+            logger.exception("WS handler crashed: %s", exc)
         finally:
             _client = None
+            logger.info("WS slot cleared")
 
     return app

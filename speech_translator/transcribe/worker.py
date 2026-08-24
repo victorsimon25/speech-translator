@@ -59,6 +59,7 @@ def _run_worker_loop(
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_file = open(log_path, "w", encoding="utf-8")  # noqa: WPS515
 
+    probe_counter = 0
     try:
         while True:
             item = in_queue.get()
@@ -78,8 +79,14 @@ def _run_worker_loop(
                 "vad_filter": config.vad_filter,
             }
             locked = lid.locked_language
-            if locked is not None:
+            # Every lid_probe_interval utterances after locking, skip the pin so
+            # Whisper can detect a language switch (D69).
+            probing = locked is not None and (
+                probe_counter % config.lid_probe_interval == 0
+            )
+            if locked is not None and not probing:
                 kwargs["language"] = locked  # pin after LID window (D32)
+            probe_counter += 1
 
             t0 = time.perf_counter()
             segments_gen, info = model.transcribe(audio, **kwargs)
@@ -98,9 +105,9 @@ def _run_worker_loop(
             text = "".join(seg.text for seg in segments).strip()
             accepted = is_accepted(no_speech_prob, avg_logprob, config) and bool(text)
 
-            # Update LID regardless of acceptance: a hallucinated "Thank you."
-            # on a real-language utterance still carries language evidence.
-            lid.update(info.language, info.language_probability, audio_ms)
+            # Update LID regardless of acceptance.  Pass probing=True so that
+            # probe results can trigger a language-switch reset (D69).
+            lid.update(info.language, info.language_probability, audio_ms, probing=probing)
 
             if log_file is not None:
                 rtf = round(asr_ms / audio_ms, 4) if audio_ms > 0 else 0.0

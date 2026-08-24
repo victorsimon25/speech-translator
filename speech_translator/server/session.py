@@ -79,6 +79,8 @@ class SessionController:
 
         # Audio thread stop event
         self._audio_stop: Any | None = None
+        # Main asyncio event loop, captured in _start() for use from the audio thread.
+        self._main_loop: Any | None = None
 
     # ------------------------------------------------------------------
     # Broadcast setter
@@ -129,6 +131,7 @@ class SessionController:
 
         worker = self._worker_factory(self._config)
         loop = asyncio.get_running_loop()
+        self._main_loop = loop
         await loop.run_in_executor(None, worker.start)
 
         if worker.state == "error":
@@ -242,6 +245,10 @@ class SessionController:
                 self._worker.out_queue.put_nowait(None)
             except Exception:
                 pass
+
+        # Signal the audio thread to stop before cancelling asyncio tasks.
+        if self._audio_stop is not None:
+            self._audio_stop.set()
 
         # Cancel all background tasks.
         for task in self._tasks:
@@ -374,19 +381,22 @@ class SessionController:
         from ..audio.select import open_source
         loop = asyncio.new_event_loop()
         try:
-            source = open_source(self._config)
+            source = open_source()
+            segmenter = self._segmenter
             for frame in source.frames():
                 if self._audio_stop is not None and self._audio_stop.is_set():
                     break
-                utterance = self._segmenter.push(frame)
+                if segmenter is None:
+                    break
+                utterance = segmenter.push(frame)
                 if utterance is not None:
                     self._pending_utterances[utterance.id] = utterance
                     if self._backpressure is not None:
                         dropped = self._backpressure.try_enqueue(utterance, self._last_sentence_id)
-                        if dropped is not None:
+                        if dropped is not None and self._main_loop is not None:
                             asyncio.run_coroutine_threadsafe(
                                 self._safe_broadcast(dropped),
-                                asyncio.get_event_loop(),
+                                self._main_loop,
                             )
                     else:
                         try:
@@ -404,11 +414,11 @@ class SessionController:
 
     def _on_speaking(self, speaking: bool) -> None:
         msg = {"type": "vad", "speaking": speaking}
-        try:
-            loop = asyncio.get_event_loop()
-            asyncio.run_coroutine_threadsafe(self._safe_broadcast(msg), loop)
-        except Exception:
-            pass
+        if self._main_loop is not None:
+            try:
+                asyncio.run_coroutine_threadsafe(self._safe_broadcast(msg), self._main_loop)
+            except Exception:
+                pass
 
     def _on_drop(self, after_id: str | None, count: int) -> None:
         msg = {"type": "dropped", "after_id": after_id, "utterances": count}
