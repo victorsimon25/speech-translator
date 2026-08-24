@@ -4,12 +4,9 @@ Real-time captions for online meetings. It captures **system audio** — whateve
 your speakers are playing — transcribes it locally on the GPU, translates it, and
 shows running captions in a browser window beside the meeting.
 
-> **Status: Level 0 (foundation) built; the pipeline itself is not.** 45 recorded
-> decisions, contracts frozen, build ladder defined. `uv sync`, the vendored VAD
-> and `doctor` work on Linux; capture, ASR, translation and the UI are Levels 1–6.
-> See [`docs/STATE.md`](docs/STATE.md) for where things stand and
-> [`docs/PLAN.md`](docs/PLAN.md) for what gets built next. Commands below marked
-> *(not yet built)* describe the **target** interface.
+> **Status: fully built — all levels 0–7 complete.** p95 word age **5.9 s**
+> measured end-to-end on the demo machine (GTX 1650 Ti). Queue depth ≤ 1 for
+> 89 % of utterances. See [`docs/STATE.md`](docs/STATE.md) for the full record.
 
 ## Why system audio
 
@@ -114,31 +111,46 @@ behind.
 - 500 000 translated characters/month, no roll-over. The counter is persisted
   across restarts, because the realistic way to burn it is a testing loop (D31).
 
-## Usage
+## Quick start (Docker — no GPU required)
 
 ```bash
-uv sync                                   # identical versions on both machines
-cp .env.example .env                      # add GOOGLE_TRANSLATE_API_KEY
+git clone <repo>
+cd speech-translator
+docker compose up --build
+# open http://localhost:8000
+```
 
-python -m speech_translator.doctor        # preflight: UTF-8, lockfile, no-torch,
-                                          # CUDA, cuDNN DLLs, vendored VAD,
-                                          # loopback device, credentials
-python -m speech_translator.doctor --no-net   # skip the live translation call
-python -m speech_translator.doctor --json     # machine-readable
+`DEMO_MODE=1` is set in the Docker image by default. The server starts with
+`FakeTranscribeWorker` — no GPU or audio hardware needed. Captions are
+placeholder text; the full UI (subtitle overlay, Document PiP, language
+selector) works normally (D72).
 
-# Capture (Level 1). list_devices is Windows-only and says so on Linux.
+## Usage (Windows — full pipeline)
+
+```bash
+uv sync                          # identical versions on both machines
+cp .env.example .env             # optional: add your email to GOOGLE_TRANSLATE_API_KEY
+                                 # (repurposed as MyMemory de= param for higher quota, D68)
+
+python -m speech_translator.doctor          # preflight: UTF-8, lockfile, no-torch,
+                                            # CUDA, cuDNN DLLs, vendored VAD,
+                                            # loopback device, translation
+python -m speech_translator.doctor --no-net # skip the live translation call
+python -m speech_translator.doctor --json   # machine-readable
+
+# Capture tools (Windows-only; list_devices says so on Linux)
 python -m speech_translator.tools.list_devices
 python -m speech_translator.tools.record_loopback -t 600 -o meeting.wav
 python -m speech_translator.tools.record_loopback --input-wav any.wav -o out.wav
 
-# Segmentation (Level 2). Where the boundaries landed, and why.
+# Segmentation inspection
 python -m speech_translator.tools.dump_utterances --input-wav meeting.wav
 python -m speech_translator.tools.dump_utterances --input-wav meeting.wav \
     --write-wav utts/          # one WAV per utterance — play them
 python -m speech_translator.tools.dump_utterances --max-utterance-ms 2000 --json
 
-# --- not yet built ---------------------------------------------------------
-python -m speech_translator                             # Level 6 → localhost:8000
+# Run the full pipeline
+python -m speech_translator                 # → http://localhost:8000
 ```
 
 `record_loopback` writes 16 kHz mono int16 — the pipeline's own frame format, and
@@ -174,15 +186,22 @@ docs/
   PLAN.md          the build ladder — levels 0-8, each with acceptance criteria
   STATE.md         where we are right now  ← read first
   INTERFACES.md    module contracts; read only the stage you're touching
-  DECISIONS.md     why things are the way they are (append-only, D1-D45)
+  DECISIONS.md     why things are the way they are (append-only, D1-D72)
   BENCHMARK.md     the Whisper measurement that picks model + compute_type
   journey/         prompts, LLM assessments, and what was learned — graded
 speech_translator/ application code
-  config.py        the D25 values; model_size/compute_type stay None until L3
+  config.py        the D25 values
   doctor.py        preflight (D40)
   logging_setup.py UTF-8 forced at package import (D41, D42)
   windows_cuda.py  puts the wheel CUDA DLLs on the loader path (D43)
+  server/
+    app.py         FastAPI: GET /, GET /subtitle, WS /ws
+    static/
+      index.html + app.js + style.css   main UI (BroadcastChannel relay, PiP)
+      subtitle.html + subtitle.css + subtitle.js   floating caption overlay
 assets/            vendored silero_vad.onnx + its MIT license (D35)
+Dockerfile         demo mode image — no GPU required
+docker-compose.yml single-command startup
 tests/
 ```
 

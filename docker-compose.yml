@@ -1,0 +1,7 @@
+services:
+  speech-translator:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DEMO_MODE=1

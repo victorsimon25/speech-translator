@@ -1,0 +1,111 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 100%;
+  height: 100vh;
+  background: rgba(10, 12, 18, 0.88);
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  font-family: system-ui, -apple-system, sans-serif;
+  color: #fff;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Accent bar ─────────────────────────────────────────────────────── */
+
+.accent-bar {
+  height: 3px;
+  background: linear-gradient(90deg, #40c878 0%, #5598e8 100%);
+  flex-shrink: 0;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────── */
+
+.subtitle-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 16px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+}
+
+.subtitle-header .label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.28);
+}
+
+#pip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 13px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.52);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+
+#pip-btn:hover {
+  background: rgba(255, 255, 255, 0.13);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+/* ── Captions area ──────────────────────────────────────────────────── */
+
+#captions {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 10px 18px 14px;
+  overflow: hidden;
+}
+
+.empty-hint {
+  text-align: center;
+  color: rgba(255, 255, 255, 0.18);
+  font-size: 13px;
+  padding: 12px 0;
+}
+
+.caption-card {
+  padding: 3px 0 5px;
+  transition: opacity 0.5s ease;
+  animation: slideUp 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.caption-card.age-0 { opacity: 1.0; }
+.caption-card.age-1 { opacity: 0.52; }
+.caption-card.age-2 { opacity: 0.22; }
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.target-text {
+  font-size: 22px;
+  font-weight: 500;
+  color: #fff;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.95), 0 0 2px rgba(0, 0, 0, 0.6);
+  line-height: 1.3;
+  letter-spacing: 0.01em;
+}
+
+.source-text {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.42);
+  margin-top: 2px;
+  line-height: 1.3;
+}

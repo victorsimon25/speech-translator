@@ -62,6 +62,10 @@ def create_app(
     async def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
 
+    @app.get("/subtitle")
+    async def subtitle() -> FileResponse:
+        return FileResponse(STATIC_DIR / "subtitle.html")
+
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.websocket("/ws")

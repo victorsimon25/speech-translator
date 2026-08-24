@@ -12,6 +12,61 @@
 const SILENCE_THRESHOLD_MS = 600;       // matches config.silence_threshold_ms (D25)
 const GAP_THRESHOLD_MS = SILENCE_THRESHOLD_MS * 2;  // show divider above this
 
+const PIP_MAX = 3;
+
+const PIP_CSS = `
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  width: 100%; height: 100%;
+  background: rgba(10, 12, 18, 0.88);
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  font-family: system-ui, -apple-system, sans-serif;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.accent-bar {
+  height: 3px;
+  background: linear-gradient(90deg, #40c878 0%, #5598e8 100%);
+  flex-shrink: 0;
+}
+#captions {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 8px 18px 12px;
+  overflow: hidden;
+}
+.caption-card {
+  padding: 3px 0 5px;
+  transition: opacity 0.5s ease;
+  animation: slideUp 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.caption-card.age-0 { opacity: 1; }
+.caption-card.age-1 { opacity: 0.52; }
+.caption-card.age-2 { opacity: 0.22; }
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.target-text {
+  font-size: 22px;
+  font-weight: 500;
+  color: #fff;
+  text-shadow: 0 1px 8px rgba(0,0,0,0.95), 0 0 2px rgba(0,0,0,0.6);
+  line-height: 1.3;
+  letter-spacing: 0.01em;
+}
+.source-text {
+  font-size: 13px;
+  color: rgba(255,255,255,0.42);
+  margin-top: 2px;
+  line-height: 1.3;
+}
+`;
+
 const STATE_LABELS = {
   idle:      "Idle",
   loading:   "Loading…",
@@ -24,6 +79,7 @@ const STATE_LABELS = {
 const LANG_NAMES = {
   en: "EN", es: "ES", fr: "FR", de: "DE", it: "IT", pt: "PT",
   zh: "ZH", ja: "JA", ko: "KO", ru: "RU", ar: "AR", hi: "HI",
+  ta: "TA", ml: "ML", kn: "KN",
 };
 
 // ── DOM refs ──────────────────────────────────────────────────────────
@@ -50,6 +106,9 @@ let currentState = "idle";
 let detectedSrcLang = null;
 let overrideActive = false;
 let isAtBottom = true;        // auto-scroll tracking
+let pipDiv = null;
+
+const bc = new BroadcastChannel("speech-translator");
 
 // ── WebSocket ─────────────────────────────────────────────────────────
 
@@ -61,6 +120,8 @@ function connect() {
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
     handleMessage(msg);
+    bc.postMessage(msg);
+    if (pipDiv && msg.type === "caption") renderIntoPip(msg);
   };
 
   ws.onclose = () => {
@@ -242,12 +303,70 @@ tgtLangSelect.addEventListener("change", () => {
 
 // ── Controls ──────────────────────────────────────────────────────────
 
+// ── PiP caption renderer ──────────────────────────────────────────────
+
+function renderIntoPip(msg) {
+  if (!pipDiv) return;
+  const doc = pipDiv.ownerDocument;
+  const card = doc.createElement("div");
+  card.className = "caption-card";
+  if (msg.target_text !== null && msg.target_text !== undefined) {
+    const tgt = doc.createElement("div");
+    tgt.className = "target-text";
+    tgt.textContent = msg.target_text;
+    card.appendChild(tgt);
+    if (msg.source_text && msg.source_text !== msg.target_text) {
+      const src = doc.createElement("div");
+      src.className = "source-text";
+      src.textContent = msg.source_text;
+      card.appendChild(src);
+    }
+  } else {
+    const tgt = doc.createElement("div");
+    tgt.className = "target-text";
+    tgt.textContent = msg.source_text || "(no text)";
+    card.appendChild(tgt);
+  }
+  pipDiv.appendChild(card);
+  while (pipDiv.children.length > PIP_MAX) pipDiv.removeChild(pipDiv.firstChild);
+  const cards = pipDiv.querySelectorAll(".caption-card");
+  const total = cards.length;
+  cards.forEach((c, i) => {
+    c.classList.remove("age-0", "age-1", "age-2");
+    c.classList.add(`age-${total - 1 - i}`);
+  });
+}
+
 startBtn.addEventListener("click", () => {
   send({ type: "start" });
 });
 
 stopBtn.addEventListener("click", () => {
   send({ type: "stop" });
+});
+
+document.getElementById("subtitle-btn").addEventListener("click", async () => {
+  if (window.documentPictureInPicture) {
+    try {
+      const pipWin = await window.documentPictureInPicture.requestWindow({
+        width: 860, height: 155,
+      });
+      const style = pipWin.document.createElement("style");
+      style.textContent = PIP_CSS;
+      pipWin.document.head.appendChild(style);
+      const bar = pipWin.document.createElement("div");
+      bar.className = "accent-bar";
+      pipWin.document.body.appendChild(bar);
+      pipDiv = pipWin.document.createElement("div");
+      pipDiv.id = "captions";
+      pipWin.document.body.appendChild(pipDiv);
+      pipWin.addEventListener("pagehide", () => { pipDiv = null; });
+    } catch {
+      window.open("/subtitle", "_blank");
+    }
+  } else {
+    window.open("/subtitle", "_blank");
+  }
 });
 
 exportBtn.addEventListener("click", () => {

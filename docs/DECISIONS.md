@@ -1392,3 +1392,68 @@ interjection in another language is still processed under the locked language.
 This is the correct behaviour — it avoids thrashing between languages on
 a multilingual remark. A sustained switch (two or more probe hits) is what
 causes a reset.
+
+---
+
+## 2026-08-24 — Session 14 (UI redesign + packaging)
+
+### D70. BroadcastChannel relay for the subtitle overlay — single WS slot kept
+
+The WebSocket handler enforces one client at a time (D38). A second `/ws`
+connection from the `/subtitle` page would be rejected with code 1008.
+
+**Decision:** `app.js` relays every incoming WS message to a
+`BroadcastChannel("speech-translator")`. The `/subtitle` page opens the same
+channel and subscribes — no second WebSocket connection is made. The main page
+must remain open, which is the natural invariant: Start/Stop controls live
+there and the audio pipeline is driven from that session.
+
+**Why not relax D38:** the single-client rule exists because this is a
+single-user, single-session tool (D38). Multi-client broadcast would require
+tracking connection state, routing control messages, and handling partial-
+failure scenarios — complexity with no user benefit. The BroadcastChannel
+approach adds three lines to `app.js` and zero lines to the server.
+
+### D71. Document PiP triggered from the main page, not the subtitle tab
+
+The subtitle window opened as a plain browser tab feels like navigating to a
+different site and drops behind desktop meeting apps (Zoom, Teams, etc.) when
+the user clicks into the meeting.
+
+**Decision:** the Subtitles button in `app.js` calls
+`window.documentPictureInPicture.requestWindow()` (Chrome/Edge 116+). This
+creates a floating OS-level window that the operating system keeps above all
+other windows, including native desktop apps — no user window management
+needed. Styles are injected via a `<style>` tag (`PIP_CSS` constant in
+`app.js`); the PiP window's DOM is populated directly by `renderIntoPip(msg)`
+on each caption event.
+
+**Fallback:** if `documentPictureInPicture` is not available (Firefox, older
+browsers), `window.open("/subtitle", "_blank")` opens the tab as before. The
+`/subtitle` route is kept as a standalone page with its own Float button, so
+users who bookmark it or open it manually also have a path to PiP.
+
+**Why this beats loading `/subtitle` into the PiP window:** the tab approach
+requires a second WS connection (D70), an extra HTTP round-trip, and a
+BroadcastChannel listener that may not yet be attached when the first caption
+arrives. Driving the PiP DOM directly from `app.js` has none of these races.
+
+### D72. DEMO_MODE env var for Docker and cross-platform testing
+
+The full pipeline requires Windows (WASAPI loopback, D3) and a CUDA GPU. A
+developer on Linux, a CI runner, or anyone evaluating the UI cannot run it.
+
+**Decision:** `DEMO_MODE=1` makes `__main__.py` inject `FakeTranscribeWorker`
+instead of the real GPU worker. The fake worker satisfies the same interface
+contract (D67) — `start()`, `stop()`, `.in_queue`, `.out_queue` — starts
+instantly, and emits placeholder transcripts. Audio capture does not run; the
+server boots and the full UI (WebSocket, captions, subtitle overlay, PiP) is
+exercisable without hardware.
+
+The `Dockerfile` sets `DEMO_MODE=1` by default. A Windows user running
+natively leaves the variable unset and gets the real pipeline.
+
+**Why an env var over a CLI flag:** env vars compose cleanly with Docker and
+`docker-compose.yml`. A `--demo` CLI flag would require modifying the
+`uvicorn.run()` call path and would not be inherited by process supervisors or
+container orchestration.

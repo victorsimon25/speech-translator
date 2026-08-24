@@ -8,38 +8,52 @@
 </head>
 <body>
 
-<!-- Top bar: status, speaking indicator, language controls, health -->
+<!-- Top bar: branding, status, wave indicator, language controls, health -->
 <div id="topbar">
+
+  <div id="app-title">
+    <span class="mic-icon">🎙</span>
+    <span class="title-text">Speech Translator</span>
+  </div>
 
   <div id="status-badge" class="state-idle">
     <span class="dot"></span>
     <span class="label">Idle</span>
   </div>
 
-  <div id="speaking-dot" title="Speaking indicator"></div>
+  <div id="speaking-dot" title="Speaking indicator">
+    <span class="bar"></span>
+    <span class="bar"></span>
+    <span class="bar"></span>
+    <span class="bar"></span>
+  </div>
 
   <div id="lang-row">
     <span id="src-lang-chip" title="Detected source language — click to override">Auto</span>
     <span id="src-lang-arrow">→</span>
     <select id="tgt-lang-select" title="Target language">
-      <option value="en">EN</option>
-      <option value="es">ES</option>
-      <option value="fr">FR</option>
-      <option value="de">DE</option>
-      <option value="it">IT</option>
-      <option value="pt">PT</option>
-      <option value="zh">ZH</option>
-      <option value="ja">JA</option>
-      <option value="ko">KO</option>
-      <option value="ru">RU</option>
-      <option value="ar">AR</option>
-      <option value="hi">HI</option>
+      <option value="en">🇬🇧 EN</option>
+      <option value="es">🇪🇸 ES</option>
+      <option value="fr">🇫🇷 FR</option>
+      <option value="de">🇩🇪 DE</option>
+      <option value="it">🇮🇹 IT</option>
+      <option value="pt">🇵🇹 PT</option>
+      <option value="zh">🇨🇳 ZH</option>
+      <option value="ja">🇯🇵 JA</option>
+      <option value="ko">🇰🇷 KO</option>
+      <option value="ru">🇷🇺 RU</option>
+      <option value="ar">🇸🇦 AR</option>
+      <option value="hi">🇮🇳 HI</option>
+      <option value="ta">🇮🇳 TA</option>
+      <option value="ml">🇮🇳 ML</option>
+      <option value="kn">🇮🇳 KN</option>
     </select>
   </div>
 
   <div id="health-badge">–</div>
 
   <button id="export-btn" class="btn" title="Download transcript as text">Export</button>
+  <button id="subtitle-btn" class="btn" title="Open subtitle view">Subtitles</button>
 
 </div>
 
